@@ -85,7 +85,7 @@ fn print_backtrace_skipping_top_frames_linux(skipframes int) bool {
 	$if no_backtrace ? {
 		return false
 	} $else {
-		$if !freestanding {
+		$if linux && !freestanding {
 			$if tinyc {
 				C.tcc_backtrace(c'Backtrace')
 				return false
@@ -145,5 +145,6 @@ fn break_if_debugger_attached() {
 	unsafe {
 		mut ptr := &voidptr(0)
 		*ptr = voidptr(0)
+		_ = ptr
 	}
 }
