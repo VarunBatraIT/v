@@ -1,5 +1,6 @@
 module time
 
+// now returns the current local time.
 pub fn now() Time {
 	mut res := Time{}
 	#let date = new Date()
@@ -15,6 +16,7 @@ pub fn now() Time {
 	return res
 }
 
+// utc returns the current UTC time.
 pub fn utc() Time {
 	mut res := Time{}
 	#let date = new Date()
@@ -30,15 +32,54 @@ pub fn utc() Time {
 	return res
 }
 
-/// Returns local time
+// local returns the local time.
 pub fn (t Time) local() Time {
 	// TODO: Does this actually correct? JS clock is always set to timezone or no?
 	// if it is not we should try to use Intl for getting local time.
 	return t
 }
 
+// sleep suspends the execution for a given duration (in nanoseconds).
 pub fn sleep(dur Duration) {
 	#let now = new Date().getTime()
 	#let toWait = BigInt(dur.val) / BigInt(time__millisecond)
 	#while (new Date().getTime() < now + Number(toWait)) {}
+}
+
+fn time_with_unix(t Time) Time {
+	if t.unix != 0 {
+		return t
+	}
+	mut res := Time{}
+	#res.year.val = t.year.val
+	#res.month.val = t.month.val
+	#res.day.val = t.day.val
+	#res.hour.val = t.hour.val
+	#res.minute.val = t.minute.val
+	#res.second.val = t.second.val
+	#res.microsecond.val = t.microsecond.val
+	#res.unix.val = t.unix.val
+
+	return res
+}
+
+// unix_now returns the current UNIX time in seconds (UTC), i.e. the value
+// that `utc().unix()` would produce, without constructing a `Time`.
+pub fn unix_now() i64 {
+	t := i64(0)
+	// floor to whole seconds, matching UNIX `time()` on the C backend.
+	// `toFixed(0)` would round, reporting the next second for the latter
+	// half of every second and firing TTL/expiry checks up to 1s early.
+	#t.val = BigInt(Math.floor(new Date().getTime() / 1000))
+
+	return t
+}
+
+// ticks returns the number of milliseconds since the UNIX epoch.
+// // On Windows ticks returns the number of milliseconds elapsed since system start.
+pub fn ticks() i64 {
+	t := i64(0)
+	#t.val = BigInt(new Date().getTime())
+
+	return t
 }

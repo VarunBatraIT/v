@@ -2,23 +2,32 @@ module math
 
 import math.internal
 
-const (
-	f64_max_exp = f64(1024)
-	f64_min_exp = f64(-1021)
-	threshold   = 7.09782712893383973096e+02 // 0x40862E42FEFA39EF
-	ln2_x56     = 3.88162421113569373274e+01 // 0x4043687a9f1af2b1
-	ln2_halfx3  = 1.03972077083991796413e+00 // 0x3ff0a2b23f3bab73
-	ln2_half    = 3.46573590279972654709e-01 // 0x3fd62e42fefa39ef
-	ln2hi       = 6.93147180369123816490e-01 // 0x3fe62e42fee00000
-	ln2lo       = 1.90821492927058770002e-10 // 0x3dea39ef35793c76
-	inv_ln2     = 1.44269504088896338700e+00 // 0x3ff71547652b82fe
-	// scaled coefficients related to expm1
-	expm1_q1    = -3.33333333333331316428e-02 // 0xBFA11111111110F4
-	expm1_q2    = 1.58730158725481460165e-03 // 0x3F5A01A019FE5585
-	expm1_q3    = -7.93650757867487942473e-05 // 0xBF14CE199EAADBB7
-	expm1_q4    = 4.00821782732936239552e-06 // 0x3ED0CFCA86E65239
-	expm1_q5    = -2.01099218183624371326e-07 // 0xBE8AFDB76E09C32D
-)
+const f64_max_exp = f64(1024)
+const f64_min_exp = f64(-1021)
+const threshold = 7.09782712893383973096e+02 // 0x40862E42FEFA39EF
+
+const ln2_x56 = 3.88162421113569373274e+01 // 0x4043687a9f1af2b1
+
+const ln2_halfx3 = 1.03972077083991796413e+00 // 0x3ff0a2b23f3bab73
+
+const ln2_half = 3.46573590279972654709e-01 // 0x3fd62e42fefa39ef
+
+const ln2hi = 6.93147180369123816490e-01 // 0x3fe62e42fee00000
+
+const ln2lo = 1.90821492927058770002e-10 // 0x3dea39ef35793c76
+
+const inv_ln2 = 1.44269504088896338700e+00 // 0x3ff71547652b82fe
+
+// scaled coefficients related to expm1
+const expm1_q1 = -3.33333333333331316428e-02 // 0xBFA11111111110F4
+
+const expm1_q2 = 1.58730158725481460165e-03 // 0x3F5A01A019FE5585
+
+const expm1_q3 = -7.93650757867487942473e-05 // 0xBF14CE199EAADBB7
+
+const expm1_q4 = 4.00821782732936239552e-06 // 0x3ED0CFCA86E65239
+
+const expm1_q5 = -2.01099218183624371326e-07
 
 // exp returns e**x, the base-e exponential of x.
 //
@@ -56,8 +65,8 @@ pub fn exp(x f64) f64 {
 	if x > 0 {
 		k = int(log2e * x + 0.5)
 	}
-	hi := x - f64(k) * math.ln2hi
-	lo := f64(k) * math.ln2lo
+	hi := x - f64(k) * ln2hi
+	lo := f64(k) * ln2lo
 	// compute
 	return expmulti(hi, lo, k)
 }
@@ -90,12 +99,13 @@ pub fn exp2(x f64) f64 {
 		k = int(x - 0.5)
 	}
 	mut t := x - f64(k)
-	hi := t * math.ln2hi
-	lo := -t * math.ln2lo
+	hi := t * ln2hi
+	lo := -t * ln2lo
 	// compute
 	return expmulti(hi, lo, k)
 }
 
+// ldexp calculates frac*(2**exp)
 pub fn ldexp(frac f64, exp int) f64 {
 	return scalbn(frac, exp)
 }
@@ -146,6 +156,7 @@ pub fn frexp(x f64) (f64, int) {
 	return f64_from_bits(y), e_
 }
 
+// expm1 calculates e**x - 1
 // special cases are:
 // expm1(+inf) = +inf
 // expm1(-inf) = -1
@@ -176,7 +187,6 @@ pub fn expm1(x f64) f64 {
 	}
 }
 
-// exp1 returns e**r × 2**k where r = hi - lo and |r| ≤ ln(2)/2.
 fn expmulti(hi f64, lo f64, k int) f64 {
 	exp_p1 := 1.66666666666666657415e-01 // 0x3FC55555; 0x55555555
 	exp_p2 := -2.77777777770155933842e-03 // 0xBF66C16C; 0x16BEBD93

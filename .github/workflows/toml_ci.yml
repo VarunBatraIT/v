@@ -2,34 +2,44 @@ name: toml CI
 
 on:
   push:
-    paths-ignore:
-      - "**.md"
+    branches:
+      - master
+    paths:
+      - 'vlib/**'
+      - '!vlib/v3/**'
+      - '.github/actions/setup-v/**'
+      - '**/toml_ci.yml'
+      - '!**.md'
   pull_request:
-    paths-ignore:
-      - "**.md"
+    paths:
+      - 'vlib/**'
+      - '!vlib/v3/**'
+      - '.github/actions/setup-v/**'
+      - '**/toml_ci.yml'
+      - '!**.md'
+
+concurrency:
+  group: toml-${{ github.workflow }}-${{ github.ref == 'refs/heads/master' && github.sha || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   toml-module-pass-external-test-suites:
-    runs-on: ubuntu-20.04
-    timeout-minutes: 10
-    env:
-      TOML_TESTS_PATH: vlib/toml/tests/testdata/burntsushi/toml-test
-      TOML_TESTS_PINNED_COMMIT: 576db85
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-v
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install --quiet -y jq
-      - name: Build V
-        run: make -j2 && ./v -cc gcc -o v cmd/v
+          v retry -- v download https://github.com/jqlang/jq/releases/download/jq-1.6/jq-linux64
+          sudo chmod 755 jq-linux64
+          sudo mv jq-linux64 /usr/bin/jq
 
-      - name: Clone BurntSushi/toml-test
-        run: |
-          git clone https://github.com/BurntSushi/toml-test.git $TOML_TESTS_PATH
-          ## TODO: update/remove this pinning once all our skip lists are empty:
-          git -C $TOML_TESTS_PATH checkout $TOML_TESTS_PINNED_COMMIT
+      - name: Show JQ Version
+        run: jq --version
 
-      - name: Run tests
-        run: ./v -stats test vlib/toml
+      - name: Download more TOML testsuits
+        run: .github/workflows/download_full_toml_test_suites.sh
+
+      - name: Run TOML tests
+        run: VTEST_TOML_DO_YAML_CONVERSION=1 VTEST_TOML_DO_LARGE_FILES=1 ./v test vlib/toml

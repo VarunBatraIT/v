@@ -1,22 +1,33 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
-// Use of this source code is governed by an MIT license
-// that can be found in the LICENSE file.
+// vtest build: !sanitized_job?
 module scanner
 
 import v.token
 import v.pref
 
 fn scan_kinds(text string) []token.Kind {
-	mut scanner := new_scanner(text, .skip_comments, &pref.Preferences{})
+	mut scanner := new_plain_scanner(text, .skip_comments, &pref.Preferences{})
 	mut token_kinds := []token.Kind{}
 	for {
-		tok := scanner.scan()
+		tok := scanner.text_scan()
 		if tok.kind == .eof {
 			break
 		}
 		token_kinds << tok.kind
 	}
 	return token_kinds
+}
+
+fn scan_tokens(text string) []token.Token {
+	mut scanner := new_plain_scanner(text, .parse_comments, &pref.Preferences{})
+	mut tokens := []token.Token{}
+	for {
+		tok := scanner.text_scan()
+		if tok.kind == .eof {
+			break
+		}
+		tokens << tok
+	}
+	return tokens
 }
 
 fn test_scan() {
@@ -137,7 +148,244 @@ fn test_ref_ref_array_ref_ref_foo() {
 	assert result[6] == .name
 }
 
+fn test_escape_rune() {
+	assert `\x61` == `a`
+	assert `\u0061` == `a`
+	assert `\U00000061` == `a`
+
+	assert `\141` == `a`
+	assert `\xe2\x98\x85` == `★`
+	assert `\342\230\205` == `★`
+
+	// the following lines test the scanner module
+	// even before it is compiled into the v executable
+
+	// SINGLE CHAR ESCAPES
+	// SINGLE CHAR APOSTROPHE
+	mut result := scan_tokens(r"`'`")
+	assert result[0].kind == .chartoken
+	assert result[0].lit == r"\'"
+
+	// SINGLE CHAR BACKTICK
+	result = scan_tokens(r'`\``')
+	assert result[0].kind == .chartoken
+	assert result[0].lit == r'\`'
+
+	// SINGLE CHAR SLASH
+	result = scan_tokens(r'`\\`')
+	assert result[0].kind == .chartoken
+	assert result[0].lit == r'\\'
+
+	// SINGLE CHAR 16-bit UNICODE ESCAPE
+	result = scan_tokens(r'`\u2605`')
+	assert result[0].kind == .chartoken
+	assert result[0].lit == r'★'
+
+	// SINGLE CHAR 32-bit UNICODE ESCAPE
+	result = scan_tokens(r'`\U00002605`')
+	assert result[0].kind == .chartoken
+	assert result[0].lit == r'★'
+
+	// SINGLE CHAR ESCAPED ASCII
+	result = scan_tokens(r'`\x61`')
+	assert result[0].kind == .chartoken
+	assert result[0].lit == r'a'
+
+	// SINGLE CHAR INCORRECT ESCAPE
+	// result = scan_tokens(r'`\x61\x61`') // should always result in an error
+
+	// SINGLE CHAR MULTI-BYTE UTF-8 (hex)
+	result = scan_tokens(r'`\xe2\x98\x85`')
+	assert result[0].lit == r'★'
+
+	// SINGLE CHAR MULTI-BYTE UTF-8 (octal)
+	result = scan_tokens(r'`\342\230\205`')
+	assert result[0].lit == r'★'
+}
+
 fn test_escape_string() {
+	// these lines work if the v compiler is working
 	assert '\x61' == 'a'
 	assert '\x62' == 'b'
+	assert '\u0061' == 'a'
+	assert '\U00000061' == 'a'
+	assert '\141' == 'a'
+	assert '\xe2\x98\x85' == '★'
+	assert '\342\230\205' == '★'
+
+	// the following lines test the scanner module
+	// even before it is compiled into the v executable
+
+	// STRING ESCAPES =================
+	// STRING APOSTROPHE
+	mut result := scan_tokens(r"'\''")
+	assert result[0].kind == .string
+	assert result[0].lit == r"\'"
+
+	// STRING BACKTICK
+	result = scan_tokens(r"'\`'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'\`'
+
+	// STRING SLASH
+	result = scan_tokens(r"'\\'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'\\'
+
+	// STRING 16-bit UNICODE ESCAPE
+	result = scan_tokens(r"'\u2605'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'★'
+	result = scan_tokens(r"'H\u2605H'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'H★H'
+
+	// STRING 32-bit UNICODE ESCAPE
+	result = scan_tokens(r"'\U00002605'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'★'
+	result = scan_tokens(r"'H\U00002605H'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'H★H'
+
+	// STRING ESCAPED ASCII
+	result = scan_tokens(r"'\x61'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'a'
+
+	// STRING ESCAPED EXTENDED ASCII
+	// (should not be converted to unicode)
+	result = scan_tokens(r"'\xe29885'")
+	assert result[0].kind == .string
+	assert result[0].lit.bytes() == [u8(0xe2), `9`, `8`, `8`, `5`]
+
+	// MIX STRING ESCAPES with UTF-16 escapes
+	result = scan_tokens(r"'\x61\u2605'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'a★'
+	result = scan_tokens(r"'\u2605\x61'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'★a'
+
+	// MIX STRING ESCAPES with UTF-16 escapes with offset
+	result = scan_tokens(r"'x  \x61\u2605\x61'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'x  a★a'
+	result = scan_tokens(r"'x  \u2605\x61\u2605'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'x  ★a★'
+
+	// MIX STRING ESCAPES with UTF-32 escapes
+	result = scan_tokens(r"'\x61\U00002605'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'a★'
+	result = scan_tokens(r"'\U00002605\x61'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'★a'
+
+	// MIX STRING ESCAPES with UTF-32 escapes with offset
+	result = scan_tokens(r"'x  \x61\U00002605\x61'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'x  a★a'
+	result = scan_tokens(r"'x  \U00002605\x61\U00002605'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'x  ★a★'
+
+	// MIX STRING ESCAPES with UTF-16 and UTF-32 escapes
+	result = scan_tokens(r"'\u2605\x61\U00002605'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'★a★'
+	result = scan_tokens(r"'\U00002605\x61\u2605'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'★a★'
+
+	// MIX STRING ESCAPES with UTF-16 and UTF-32 escapes with offset
+	result = scan_tokens(r"'x  \x61\U00002605\x61\u2605'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'x  a★a★'
+	result = scan_tokens(r"'x  \x61\u2605\x61\U00002605'")
+	assert result[0].kind == .string
+	assert result[0].lit == r'x  a★a★'
+
+	// SHOULD RESULT IN ERRORS
+	// result = scan_tokens(r'`\x61\x61`') // should always result in an error
+	// result = scan_tokens(r"'\x'") // should always result in an error
+	// result = scan_tokens(r'`hello`') // should always result in an error
+}
+
+fn assert_str_interpolation_works(mlen int, text string) {
+	mut max_len := 0
+	mut scanner := new_plain_scanner(text, .skip_comments, &pref.Preferences{})
+	for {
+		tok := scanner.text_scan()
+		if scanner.str_helper_tokens.len > max_len {
+			max_len = scanner.str_helper_tokens.len
+		}
+		if tok.kind == .eof {
+			break
+		}
+	}
+	assert max_len == mlen
+	assert scanner.errors.len == 0
+	assert scanner.str_helper_tokens.len == 0
+}
+
+fn test_string_interpolation_with_nested_string_does_not_grow_str_helper_tokens_too_much() {
+	sinterpolation := " s := 'x \${if true { '{' } else { '}' }} y' "
+	assert_str_interpolation_works(3, sinterpolation)
+	assert_str_interpolation_works(3, sinterpolation + sinterpolation + sinterpolation)
+	assert_str_interpolation_works(3, '{'.repeat(100) + sinterpolation + '}'.repeat(100))
+	assert_str_interpolation_works(0, '{'.repeat(100) + '}'.repeat(100))
+}
+
+fn test_dollar_sign_is_literal_without_braces() {
+	mut result := scan_tokens("'a$b'")
+	assert result.len == 1
+	assert result[0].kind == .string
+	assert result[0].lit == 'a$b'
+
+	result = scan_tokens('"a$b"')
+	assert result.len == 1
+	assert result[0].kind == .string
+	assert result[0].lit == 'a$b'
+}
+
+fn test_comment_string() {
+	mut result := scan_tokens('// single line comment will get an \\x01 prepended')
+	assert result[0].kind == .comment
+	assert result[0].lit[0] == u8(1) // \x01
+	// result = scan_tokens('/// doc comment will keep third / at beginning')
+	// result = scan_tokens('/* block comment will be stripped of whitespace */')
+	// result = scan_tokens('a := 0 // line end comment also gets \\x01 prepended')
+}
+
+// Strings without proper 00B at the end keep scanner from failing, hence scanner
+// will read beyond end of string into unknown memory unless there are proper bound checks
+fn test_truncated_escape_at_eof_does_not_read_past_end() {
+	prefs := &pref.Preferences{
+		output_mode: .silent
+	}
+	// buf_x = ['"', '\\', 'x', 'a', 'b', '"']; 3-byte view ends after 'x'.
+	// Buggy scanner reads [3]='a', [4]='b' — valid hex — and reports NO \x error.
+	buf_x := r'"\xab"'.bytes()
+	text_x := unsafe { tos(buf_x.data, 3) }
+	mut s := new_plain_scanner(text_x, .skip_comments, prefs)
+	_ = s.text_scan()
+	assert s.errors.any(it.message.contains('used without two following hex digits')), r'scanner must report \x error for "\xab" truncated after "\x"'
+
+	// buf_u = ['"', '\\', 'u', '1', '2', '3', '4', '"']; 3-byte view ends after 'u'.
+	// Buggy scanner reads [3]...[6] — all valid hex — and reports NO \u error.
+	buf_u := r'"\u1234"'.bytes()
+	text_u := unsafe { tos(buf_u.data, 3) }
+	mut s2 := new_plain_scanner(text_u, .skip_comments, prefs)
+	_ = s2.text_scan()
+	assert s2.errors.any(it.message.contains('incomplete 16 bit unicode')), r'scanner must report \u error for "\u1234" truncated after "\u"'
+
+	// buf_uu = ['"', '\\', 'U', '1'...'8', '"']; 3-byte view ends after 'U'.
+	// Buggy scanner reads [3]...[10] — all valid hex — and reports NO \U error.
+	buf_uu := r'"\U12345678"'.bytes()
+	text_uu := unsafe { tos(buf_uu.data, 3) }
+	mut s3 := new_plain_scanner(text_uu, .skip_comments, prefs)
+	_ = s3.text_scan()
+	assert s3.errors.any(it.message.contains('incomplete 32 bit unicode')), r'scanner must report \U error for "\U12345678" truncated after "\U"'
 }

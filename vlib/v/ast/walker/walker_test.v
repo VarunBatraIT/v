@@ -4,9 +4,9 @@ import v.parser
 import v.pref
 
 fn parse_text(text string) &ast.File {
-	tbl := ast.new_table()
+	mut tbl := ast.new_table()
 	prefs := pref.new_preferences()
-	return parser.parse_text(text, '', tbl, .skip_comments, prefs)
+	return parser.parse_text(text, '', mut tbl, .skip_comments, prefs)
 }
 
 struct NodeByOffset {
@@ -15,8 +15,8 @@ mut:
 	node ast.Node
 }
 
-fn (mut n NodeByOffset) visit(node &ast.Node) ? {
-	node_pos := node.position()
+fn (mut n NodeByOffset) visit(node &ast.Node) ! {
+	node_pos := node.pos()
 	if n.pos >= node_pos.pos && n.pos <= node_pos.pos + node_pos.len && node !is ast.File {
 		n.node = node
 		return error('')
@@ -46,7 +46,7 @@ fn test_inspect() {
 module main
 	'
 	file := parse_text(source)
-	walker.inspect(file, voidptr(0), fn (node &ast.Node, data voidptr) bool {
+	walker.inspect(file, unsafe { nil }, fn (node &ast.Node, data voidptr) bool {
 		// Second visit must be ast.Stmt
 		if node is ast.Stmt {
 			if node !is ast.Module {

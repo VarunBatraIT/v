@@ -1,6 +1,9 @@
-import strings
+// vtest retry: 3
+// vtest build: present_node?
 
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// import strings
+
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 
@@ -229,6 +232,51 @@ fn test_split() {
 	assert vals[1] == ''
 }
 
+fn test_split_any() {
+	mut s := 'aaa'
+	mut a := s.split_any('')
+	assert a.len == 3
+	assert a[0] == 'a'
+	assert a[1] == 'a'
+	assert a[2] == 'a'
+	s = ''
+	a = s.split_any('')
+	assert a.len == 0
+	s = '12131415'
+	a = s.split_any('1')
+	assert a.len == 5
+	assert a[0] == ''
+	assert a[1] == '2'
+	assert a[2] == '3'
+	assert a[3] == '4'
+	assert a[4] == '5'
+	s = '12131415'
+	a = s.split_any('2345')
+	assert a.len == 4
+	assert a[0] == '1'
+	assert a[1] == '1'
+	assert a[2] == '1'
+	assert a[3] == '1'
+	s = 'a,b,c'
+	a = s.split_any('],')
+	assert a.len == 3
+	assert a[0] == 'a'
+	assert a[1] == 'b'
+	assert a[2] == 'c'
+	s = 'a]b]c'
+	a = s.split_any('],')
+	assert a.len == 3
+	assert a[0] == 'a'
+	assert a[1] == 'b'
+	assert a[2] == 'c'
+	s = 'a]b]c'
+	a = s.split_any('],\\')
+	assert a.len == 3
+	assert a[0] == 'a'
+	assert a[1] == 'b'
+	assert a[2] == 'c'
+}
+
 /*
 fn test_trim_space() {
 	a := ' a '
@@ -336,6 +384,16 @@ fn test_replace_each() {
 	assert s2.replace_each(['hello_world', 'aaa', 'hello', 'bbb']) == 'aaa bbb'
 }
 
+fn test_format() {
+	template := 'First: {0}, First again: {0}, Second: {1}, Third: {2}'
+	assert template.format('A', 'B', 'C') == 'First: A, First again: A, Second: B, Third: C'
+	assert template.format('R', 'G', 'B') == 'First: R, First again: R, Second: G, Third: B'
+	assert 'Escaped {{0}} and {{braces}}'.format('unused') == 'Escaped {0} and {braces}'
+	assert '{0} {3} {1}'.format('A', 'B') == 'A {3} B'
+	assert '{10}-{2}'.format('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10') == '10-2'
+	assert 'keep {name} and {1'.format('A', 'B') == 'keep {name} and {1'
+}
+
 fn test_itoa() {
 	num := 777
 	assert num.str() == '777'
@@ -404,6 +462,13 @@ fn test_contains_any() {
 	assert !''.contains_any('')
 }
 
+fn test_contains_only() {
+	assert '23885'.contains_only('0123456789')
+	assert '23gg885'.contains_only('01g23456789')
+	assert !'hello;'.contains_only('hello')
+	assert !''.contains_only('')
+}
+
 fn test_contains_any_substr() {
 	s := 'Some random text'
 	assert s.contains_any_substr(['false', 'not', 'rand'])
@@ -422,7 +487,7 @@ fn test_arr_contains() {
 fn test_to_num() {
 	s := '7'
 	assert s.int() == 7
-	assert s.byte() == 7
+	assert s.u8() == 7
 	assert s.u64() == 7
 	f := '71.5 hasdf'
 	// QTODO
@@ -636,6 +701,7 @@ fn test_for_loop_two() {
 
 fn test_quote() {
 	a := `'`
+	println(a)
 	println('testing double quotes')
 	b := 'hi'
 	assert b == 'hi'
@@ -659,7 +725,7 @@ fn test_repeat() {
 	assert s2.repeat(5) == s2
 	assert s2.repeat(1) == s2
 	assert s2.repeat(0) == s2
-	// TODO Add test for negative values
+	// TODO: Add test for negative values
 }
 
 fn test_starts_with() {
@@ -677,34 +743,34 @@ fn test_starts_with_capital() {
 	assert ' No'.starts_with_capital() == false
 }
 
-fn test_trim_prefix() {
+fn test_trim_string_left() {
 	s := 'V Programming Language'
-	assert s.trim_prefix('V ') == 'Programming Language'
-	assert s.trim_prefix('V Programming ') == 'Language'
-	assert s.trim_prefix('Language') == s
+	assert s.trim_string_left('V ') == 'Programming Language'
+	assert s.trim_string_left('V Programming ') == 'Language'
+	assert s.trim_string_left('Language') == s
 
 	s2 := 'TestTestTest'
-	assert s2.trim_prefix('Test') == 'TestTest'
-	assert s2.trim_prefix('TestTest') == 'Test'
+	assert s2.trim_string_left('Test') == 'TestTest'
+	assert s2.trim_string_left('TestTest') == 'Test'
 
 	s3 := '123Test123Test'
-	assert s3.trim_prefix('123') == 'Test123Test'
-	assert s3.trim_prefix('123Test') == '123Test'
+	assert s3.trim_string_left('123') == 'Test123Test'
+	assert s3.trim_string_left('123Test') == '123Test'
 }
 
-fn test_trim_suffix() {
+fn test_trim_string_right() {
 	s := 'V Programming Language'
-	assert s.trim_suffix(' Language') == 'V Programming'
-	assert s.trim_suffix(' Programming Language') == 'V'
-	assert s.trim_suffix('V') == s
+	assert s.trim_string_right(' Language') == 'V Programming'
+	assert s.trim_string_right(' Programming Language') == 'V'
+	assert s.trim_string_right('V') == s
 
 	s2 := 'TestTestTest'
-	assert s2.trim_suffix('Test') == 'TestTest'
-	assert s2.trim_suffix('TestTest') == 'Test'
+	assert s2.trim_string_right('Test') == 'TestTest'
+	assert s2.trim_string_right('TestTest') == 'Test'
 
 	s3 := '123Test123Test'
-	assert s3.trim_suffix('123') == s3
-	assert s3.trim_suffix('123Test') == '123Test'
+	assert s3.trim_string_right('123') == s3
+	assert s3.trim_string_right('123Test') == '123Test'
 }
 
 fn test_raw() {
@@ -712,7 +778,7 @@ fn test_raw() {
 	lines := raw.split('\n')
 	println(lines)
 	assert lines.len == 1
-	println('raw string: "$raw"')
+	println('raw string: "${raw}"')
 
 	raw2 := r'Hello V\0'
 	assert raw2[7] == `\\`
@@ -727,6 +793,7 @@ fn test_raw() {
 
 fn test_raw_with_quotes() {
 	raw := r"some'" + r'"thing' // " should be escaped in the generated C code
+	println(raw)
 	// assert raw[0] == `s`
 	// assert raw[5] == `"`
 	// assert raw[6] == `t`
@@ -734,8 +801,8 @@ fn test_raw_with_quotes() {
 
 fn test_escape() {
 	a := 10
-	println("\"$a")
-	// assert "\"$a" == '"10'
+	println("\"${a}")
+	// assert "\"${a}" == '"10'
 }
 
 fn test_atoi() {
@@ -759,9 +826,9 @@ fn test_raw_inter() {
 fn test_c_r() {
 	// This used to break because of r'' and c''
 	c := 42
-	println('$c')
+	println('${c}')
 	r := 50
-	println('$r')
+	println('${r}')
 }
 
 fn test_inter_before_comptime_if() {
@@ -776,23 +843,31 @@ fn test_inter_before_comptime_if() {
 fn test_double_quote_inter() {
 	a := 1
 	b := 2
-	println('$a $b')
-	assert '$a $b' == '1 2'
-	assert '$a $b' == '1 2'
+	println('${a} ${b}')
+	assert '${a} ${b}' == '1 2'
+	assert '${a} ${b}' == '1 2'
 }
 
-fn foo(b byte) byte {
+fn foo(b u8) u8 {
 	return b - 10
 }
 
-fn filter(b byte) bool {
+fn filter(b u8) bool {
 	return b != `a`
 }
 
-/*
 fn test_split_into_lines() {
-	line_content := 'Line'
-	text_crlf := '$line_content\r\n$line_content\r\n$line_content'
+	line_content := 'line content'
+
+	text_cr := '${line_content}\r${line_content}\r${line_content}'
+	lines_cr := text_cr.split_into_lines()
+
+	assert lines_cr.len == 3
+	for line in lines_cr {
+		assert line == line_content
+	}
+
+	text_crlf := '${line_content}\r\n${line_content}\r\n${line_content}'
 	lines_crlf := text_crlf.split_into_lines()
 
 	assert lines_crlf.len == 3
@@ -800,15 +875,31 @@ fn test_split_into_lines() {
 		assert line == line_content
 	}
 
-	text_lf := '$line_content\n$line_content\n$line_content'
+	text_lf := '${line_content}\n${line_content}\n${line_content}'
 	lines_lf := text_lf.split_into_lines()
 
 	assert lines_lf.len == 3
 	for line in lines_lf {
 		assert line == line_content
 	}
+
+	text_mixed := '${line_content}\n${line_content}\r${line_content}'
+	lines_mixed := text_mixed.split_into_lines()
+
+	assert lines_mixed.len == 3
+	for line in lines_mixed {
+		assert line == line_content
+	}
+
+	text_mixed_trailers := '${line_content}\n${line_content}\r${line_content}\r\r\r\n\n\n\r\r'
+	lines_mixed_trailers := text_mixed_trailers.split_into_lines()
+
+	assert lines_mixed_trailers.len == 9
+	for line in lines_mixed_trailers {
+		assert line == line_content || line == ''
+	}
 }
-*/
+
 fn test_string_literal_with_backslash() {
 	a := 'HelloWorld'
 	assert a == 'HelloWorld'
@@ -874,24 +965,24 @@ fn test_interpolation_after_quoted_variable_still_works() {
 	tt := 'xyz'
 
 	// Basic interpolation, no internal quotes
-	yy := 'Replacing $rr with $tt'
+	yy := 'Replacing ${rr} with ${tt}'
 	assert yy == 'Replacing abc with xyz'
 
 	// Interpolation after quoted variable ending with 'r'quote
 	// that may be mistaken with the start of a raw string,
 	// ensure that it is not.
-	ss := 'Replacing "$rr" with "$tt"'
+	ss := 'Replacing "${rr}" with "${tt}"'
 	assert ss == 'Replacing "abc" with "xyz"'
-	zz := "Replacing '$rr' with '$tt'"
+	zz := "Replacing '${rr}' with '${tt}'"
 	assert zz == "Replacing 'abc' with 'xyz'"
 
 	// Interpolation after quoted variable ending with 'c'quote
 	// may be mistaken with the start of a c string, so
 	// check it is not.
 	cc := 'abc'
-	ccc := "Replacing '$cc' with '$tt'"
+	ccc := "Replacing '${cc}' with '${tt}'"
 	assert ccc == "Replacing 'abc' with 'xyz'"
-	cccq := 'Replacing "$cc" with "$tt"'
+	cccq := 'Replacing "${cc}" with "${tt}"'
 	assert cccq == 'Replacing "abc" with "xyz"'
 }
 */
@@ -899,4 +990,25 @@ fn test_index_any() {
 	x := 'abcdefghij'
 	assert x.index_any('ef') == 4
 	assert x.index_any('fe') == 4
+}
+
+fn test_js_string() {
+	s := js'hello V'
+	assert s.charAt(JS.Number(0)) == js'h'
+	assert s.charAt(JS.Number(6)) == js'V'
+	assert s.charCodeAt(JS.Number(0)) == JS.Number(104)
+	assert s.toUpperCase() == js'HELLO V'
+	assert s.toLowerCase() == js'hello v'
+	assert s.concat(js' from JS') == js'hello V from JS'
+	assert s.includes(js' ') == JS.Boolean(true)
+	assert s.startsWith(js'hello') == JS.Boolean(true)
+	assert s.endsWith(js'V') == JS.Boolean(true)
+}
+
+fn test_tos_from_u8_ptr() {
+	mut buf := [u8(`0`), `0`, `0`, `0`, `-`, `0`, `0`, `-`, `0`, `0`, `T`, `0`, `0`, `:`, `0`,
+		`0`, `:`, `0`, `0`, `.`, `0`, `0`, `0`, `0`, `0`, `0`, `0`, `0`, `0`, `Z`]!
+	s := unsafe { tos(&buf[0], buf.len) }
+
+	assert s == '0000-00-00T00:00:00.000000000Z'
 }

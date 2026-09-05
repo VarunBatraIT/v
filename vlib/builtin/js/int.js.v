@@ -1,5 +1,37 @@
 module builtin
 
+pub type byte = u8
+
+pub const min_i8 = i8(-128)
+pub const max_i8 = i8(127)
+
+pub const min_i16 = i16(-32768)
+pub const max_i16 = i16(32767)
+
+pub const min_i32 = i32(-2147483648)
+pub const max_i32 = i32(2147483647)
+
+// -9223372036854775808 is wrong, because C compilers parse literal values
+// without sign first, and 9223372036854775808 overflows i64, hence the
+// consecutive subtraction by 1
+pub const min_i64 = i64(-9223372036854775807 - 1)
+pub const max_i64 = i64(9223372036854775807)
+
+pub const min_int = $if new_int ? && x64 { int(min_i64) } $else { int(min_i32) }
+pub const max_int = $if new_int ? && x64 { int(max_i64) } $else { int(max_i32) }
+
+pub const min_u8 = u8(0)
+pub const max_u8 = u8(255)
+
+pub const min_u16 = u16(0)
+pub const max_u16 = u16(65535)
+
+pub const min_u32 = u32(0)
+pub const max_u32 = u32(4294967295)
+
+pub const min_u64 = u64(0)
+pub const max_u64 = u64(18446744073709551615)
+
 pub fn (i i8) str() string {
 	mut res := ''
 	#res.str = i.val.toString()
@@ -106,9 +138,11 @@ pub fn (x u16) hex() string {
 }
 
 pub fn (x i8) hex() string {
-	res := ''
+	mut res := ''
 	#res.str = x.val.toString(16)
-
+	if res.len < 2 {
+		res = '0' + res
+	}
 	return res
 }
 
@@ -133,16 +167,17 @@ pub fn (x int_literal) hex() string {
 	return res
 }
 
-pub fn (x byte) hex() string {
-	res := ''
+pub fn (x u8) hex() string {
+	mut res := ''
 	#res.str = x.val.toString(16)
-
+	if res.len < 2 {
+		res = '0' + res
+	}
 	return res
 }
 
-// hex returns a string with the hexadecimal representation
-// of the byte elements of the array.
-pub fn (b []byte) hex() string {
+// hex returns a string with the hexadecimal representation of the byte elements of the array.
+pub fn (b []u8) hex() string {
 	mut hex := ''
 	for i in b {
 		mut z := i
@@ -172,7 +207,7 @@ pub fn (i i64) hex2() string {
 	return '0x' + i.hex()
 }
 
-pub fn (i byte) hex2() string {
+pub fn (i u8) hex2() string {
 	return '0x' + i.hex()
 }
 

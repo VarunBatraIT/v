@@ -1,54 +1,129 @@
 module os
 
-fn C.setpgid(pid int, pgid int) int
+fn C.setpgid(pid i32, pgid i32) i32
+
+fn env_value_from_entries(env []string, name string) ?string {
+	prefix := '${name}='
+	for entry in env {
+		if entry.starts_with(prefix) {
+			return entry[prefix.len..]
+		}
+	}
+	return none
+}
+
+fn (p &Process) unix_resolve_filename() !string {
+	if is_abs_path(p.filename) {
+		return p.filename
+	}
+	if p.filename.contains(path_separator) {
+		if p.work_folder != '' {
+			return abs_path(p.filename)
+		}
+		return p.filename
+	}
+	path := env_value_from_entries(p.env, 'PATH') or { return error_failed_to_find_executable() }
+	return find_abs_path_of_executable_in_path_env(p.filename, path)
+}
 
 fn (mut p Process) unix_spawn_process() int {
-	mut pipeset := [6]int{}
+	// Each `C.pipe` writes two C `int` file descriptors; back them with `i32` so the
+	// buffer matches the C ABI (a V `[6]int` is six 64-bit slots now that `int` is
+	// 64-bit, so `pipe` would write out of bounds). The fds convert back to `int`
+	// implicitly where they are stored/closed.
+	mut pipeset := [6]i32{}
 	if p.use_stdio_ctl {
-		mut dont_care := C.pipe(&pipeset[0]) // pipe read end 0 <- 1 pipe write end
+		mut dont_care := 0
+		if !p.has_stdin_path {
+			dont_care = C.pipe(&pipeset[0]) // pipe read end 0 <- 1 pipe write end
+		}
 		dont_care = C.pipe(&pipeset[2]) // pipe read end 2 <- 3 pipe write end
-		dont_care = C.pipe(&pipeset[4]) // pipe read end 4 <- 5 pipe write end
+		if !p.merge_stdio {
+			dont_care = C.pipe(&pipeset[4]) // pipe read end 4 <- 5 pipe write end
+		}
 		_ = dont_care // using `_` directly on each above `pipe` fails to avoid C compiler generate an `-Wunused-result` warning
 	}
 	pid := fork()
 	if pid != 0 {
 		// This is the parent process after the fork.
-		// NB: pid contains the process ID of the child process
+		// Note: pid contains the process ID of the child process
 		if p.use_stdio_ctl {
-			p.stdio_fd[0] = pipeset[1] // store the write end of child's in
+			if !p.has_stdin_path {
+				p.stdio_fd[0] = pipeset[1] // store the write end of child's in
+				fd_close(pipeset[0])
+			}
 			p.stdio_fd[1] = pipeset[2] // store the read end of child's out
-			p.stdio_fd[2] = pipeset[4] // store the read end of child's err
+			if !p.merge_stdio {
+				p.stdio_fd[2] = pipeset[4] // store the read end of child's err
+			}
 			// close the rest of the pipe fds, the parent does not need them
-			fd_close(pipeset[0])
 			fd_close(pipeset[3])
-			fd_close(pipeset[5])
+			if !p.merge_stdio {
+				fd_close(pipeset[5])
+			}
 		}
 		return pid
 	}
 	//
 	// Here, we are in the child process.
 	// It still shares file descriptors with the parent process,
-	// but it is otherwise independant and can do stuff *without*
+	// but it is otherwise independent and can do stuff *without*
 	// affecting the parent process.
 	//
 	if p.use_pgroup {
 		C.setpgid(0, 0)
 	}
+	mut stdin_fd := -1
+	if p.has_stdin_path {
+		stdin_fd = C.open(&char(p.stdin_path.str), o_rdonly, 0)
+		if stdin_fd == -1 {
+			eprintln('failed to open stdin file "${p.stdin_path}": ${posix_get_error_msg(C.errno)}')
+			exit(1)
+		}
+	}
 	if p.use_stdio_ctl {
-		// Redirect the child standart in/out/err to the pipes that
+		// Redirect the child standard in/out/err to the pipes that
 		// were created in the parent.
 		// Close the parent's pipe fds, the child do not need them:
-		fd_close(pipeset[1])
+		if !p.has_stdin_path {
+			fd_close(pipeset[1])
+		}
 		fd_close(pipeset[2])
-		fd_close(pipeset[4])
+		if !p.merge_stdio {
+			fd_close(pipeset[4])
+		}
 		// redirect the pipe fds to the child's in/out/err fds:
-		C.dup2(pipeset[0], 0)
+		if p.has_stdin_path {
+			C.dup2(stdin_fd, 0)
+		} else {
+			C.dup2(pipeset[0], 0)
+		}
 		C.dup2(pipeset[3], 1)
-		C.dup2(pipeset[5], 2)
+		if p.merge_stdio {
+			C.dup2(pipeset[3], 2)
+		} else {
+			C.dup2(pipeset[5], 2)
+		}
 		// close the pipe fdsx after the redirection
-		fd_close(pipeset[0])
+		if !p.has_stdin_path {
+			fd_close(pipeset[0])
+		}
 		fd_close(pipeset[3])
-		fd_close(pipeset[5])
+		if !p.merge_stdio {
+			fd_close(pipeset[5])
+		}
+	} else if p.has_stdin_path {
+		C.dup2(stdin_fd, 0)
+	}
+	if stdin_fd > 0 {
+		fd_close(stdin_fd)
+	}
+	p.filename = p.unix_resolve_filename() or {
+		eprintln(err)
+		exit(1)
+	}
+	if p.work_folder != '' {
+		chdir(p.work_folder) or {}
 	}
 	execve(p.filename, p.args, p.env) or {
 		eprintln(err)
@@ -65,6 +140,10 @@ fn (mut p Process) unix_resume_process() {
 	C.kill(p.pid, C.SIGCONT)
 }
 
+fn (mut p Process) unix_term_process() {
+	C.kill(p.pid, C.SIGTERM)
+}
+
 fn (mut p Process) unix_kill_process() {
 	C.kill(p.pid, C.SIGKILL)
 }
@@ -74,36 +153,32 @@ fn (mut p Process) unix_kill_pgroup() {
 }
 
 fn (mut p Process) unix_wait() {
-	cstatus := 0
-	ret := C.waitpid(p.pid, &cstatus, 0)
-	if ret == -1 {
-		p.err = posix_get_error_msg(C.errno)
-		return
-	}
-	pret, is_signaled := posix_wait4_to_exit_status(cstatus)
-	if is_signaled {
-		p.status = .aborted
-		p.err = 'Terminated by signal ${ret:2d} (${sigint_to_signal_name(pret)})'
-	} else {
-		p.status = .exited
-	}
-	p.code = pret
+	p.impl_check_pid_status(false, 0)
 }
 
 fn (mut p Process) unix_is_alive() bool {
-	cstatus := 0
-	ret := C.waitpid(p.pid, &cstatus, C.WNOHANG)
+	return p.impl_check_pid_status(true, C.WNOHANG)
+}
+
+fn (mut p Process) impl_check_pid_status(exit_early_on_ret0 bool, waitpid_options int) bool {
+	mut cstatus := 0
+	mut ret := -1
+	$if !emscripten ? {
+		ret = C.waitpid(p.pid, &cstatus, waitpid_options)
+	}
+	p.code = ret
 	if ret == -1 {
 		p.err = posix_get_error_msg(C.errno)
 		return false
 	}
-	if ret == 0 {
+	if exit_early_on_ret0 && ret == 0 {
 		return true
 	}
-	pret, is_signaled := posix_wait4_to_exit_status(cstatus)
+	mut pret, is_signaled := posix_wait4_to_exit_status(cstatus)
 	if is_signaled {
 		p.status = .aborted
-		p.err = 'Terminated by signal ${ret:2d} (${sigint_to_signal_name(pret)})'
+		p.err = 'Terminated by signal ${pret:2d} (${sigint_to_signal_name(pret)})'
+		pret += 128
 	} else {
 		p.status = .exited
 	}
@@ -122,6 +197,9 @@ fn (mut p Process) win_stop_process() {
 fn (mut p Process) win_resume_process() {
 }
 
+fn (mut p Process) win_term_process() {
+}
+
 fn (mut p Process) win_kill_process() {
 }
 
@@ -135,13 +213,17 @@ fn (mut p Process) win_is_alive() bool {
 	return false
 }
 
-fn (mut p Process) win_write_string(idx int, s string) {
+fn (mut p Process) win_write_string(_idx int, _s string) {
 }
 
-fn (mut p Process) win_read_string(idx int, maxbytes int) (string, int) {
+fn (mut p Process) win_read_string(_idx int, _maxbytes int) (string, int) {
 	return '', 0
 }
 
-fn (mut p Process) win_slurp(idx int) string {
+fn (mut p Process) win_is_pending(_idx int) bool {
+	return false
+}
+
+fn (mut p Process) win_slurp(_idx int) string {
 	return ''
 }

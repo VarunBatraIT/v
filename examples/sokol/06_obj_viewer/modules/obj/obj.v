@@ -64,7 +64,7 @@ fn get_int(s string, start_index int) (int, int) {
 		if state == .ints {
 			match c {
 				`0`...`9` {
-					// println("$res => ${(int(c) - 48)}")
+					// println("${res} => ${(int(c) - 48)}")
 					res = res * 10 + (int(c) - 48)
 					i++
 					continue
@@ -92,7 +92,7 @@ fn get_float(s string, start_index int) (f64, int) {
 		}
 		i++
 	}
-	// println(" get_float: ($start_index,$i) [${s[start_index..i]}]")
+	// println(" get_float: (${start_index},${i}) [${s[start_index..i]}]")
 	// f_res := strconv.atof_quick(s[start_index..i])
 	f_res := strconv.atof_quick(s[i1..i])
 	return f_res, i
@@ -105,11 +105,11 @@ fn parse_3f(row string, start_index int) m4.Vec4 {
 	mut f1 := f64(0)
 	mut f2 := f64(0)
 	f0, mut p := get_float(row, i)
-	// print("Here f0: $f0 $p ")
+	// print("Here f0: ${f0} ${p} ")
 	f1, p = get_float(row, p + 1)
-	// print("Here f1: $f1 $p ")
+	// print("Here f1: ${f1} ${p} ")
 	f2, p = get_float(row, p + 1)
-	// print("Here f2: $f2 $p ")
+	// print("Here f2: ${f2} ${p} ")
 	return m4.Vec4{
 		e: [f32(f0), f32(f1), f32(f2), 1]!
 	}
@@ -138,7 +138,7 @@ fn (mut m ObjPart) parse_floats(row string, start_index int) m4.Vec4 {
 }
 
 // read and manage all the faes from an .obj file data
-fn (mut p Part) parse_faces(row string, start_index int, obj ObjPart) {
+fn (mut p Part) parse_faces(row string, start_index int, obj_part ObjPart) {
 	mut i := start_index + 1
 	mut res := [][3]int{}
 	mut v := 0
@@ -171,15 +171,15 @@ fn (mut p Part) parse_faces(row string, start_index int, obj ObjPart) {
 		// manage negative indexes
 		// NOTE: not well suporeted now
 		if v < 0 {
-			// println("${obj.v.len} ${obj.v.len-c}")
-			v = obj.v.len - v + 1
+			// println("${obj_part.v.len} ${obj_part.v.len-c}")
+			v = obj_part.v.len - v + 1
 			// exit(0)
 		}
 		if n < 0 {
-			n = obj.vn.len - n + 1
+			n = obj_part.vn.len - n + 1
 		}
 		if t < 0 {
-			t = obj.vt.len - t + 1
+			t = obj_part.vt.len - t + 1
 		}
 		res << [v - 1, n - 1, t - 1]!
 	}
@@ -198,7 +198,7 @@ pub fn (mut obj_part ObjPart) parse_obj_buffer(rows []string, single_material bo
 	obj_part.part << default_part
 	// println("OBJ file has ${rows.len} rows")
 	for c, row in rows {
-		// println("$c $row")
+		// println("${c} ${row}")
 		mut i := 0
 		row_count++
 		for true {
@@ -226,7 +226,7 @@ pub fn (mut obj_part ObjPart) parse_obj_buffer(rows []string, single_material bo
 				`u` {
 					if single_material == false && row[i..i + 6] == 'usemtl' {
 						material := row[i + 7..].trim_space()
-						// println("material: $material")
+						// println("material: ${material}")
 						// manage multiple materials in an part
 						if obj_part.part[obj_part.part.len - 1].material.len > 0 {
 							mat_count++
@@ -252,10 +252,10 @@ pub fn (mut obj_part ObjPart) parse_obj_buffer(rows []string, single_material bo
 						// normals
 						`n` {
 							obj_part.vn << parse_3f(row, i + 2)
-							// println("Vertex line: $c")
+							// println("Vertex line: ${c}")
 							break
 						}
-						// parameteres uvw
+						// parameters uvw
 						`p` {
 							obj_part.vp << parse_3f(row, i + 2)
 							// println("Vertex line: ${obj_part.vp.len}")
@@ -264,21 +264,21 @@ pub fn (mut obj_part ObjPart) parse_obj_buffer(rows []string, single_material bo
 						// texture uvw
 						`t` {
 							obj_part.vt << obj_part.parse_floats(row, i + 2)
-							// println("Vertex line: $c")
+							// println("Vertex line: ${c}")
 							break
 						}
 						else {
 							obj_part.v << parse_3f(row, i + 1)
-							// println("$row => ${obj_part.v[obj_part.v.len-1]}")
+							// println("${row} => ${obj_part.v[obj_part.v.len-1]}")
 							break
 						}
 					}
 				}
 				`f` {
-					// println("$c $row")
+					// println("${c} ${row}")
 					obj_part.part[obj_part.part.len - 1].parse_faces(row, i, obj_part)
 					// println(obj_part.part[obj_part.part.len - 1].faces.len)
-					// println("Faces line: $c")
+					// println("Faces line: ${c}")
 					break
 				}
 				// end of the line, comments
@@ -287,14 +287,15 @@ pub fn (mut obj_part ObjPart) parse_obj_buffer(rows []string, single_material bo
 				}
 				else {}
 			}
+
 			i++
 		}
 		// if c == 2 { break }
 		if c % 100000 == 0 && c > 0 {
-			println('$c rows parsed')
+			println('${c} rows parsed')
 		}
 	}
-	println('$row_count .obj Rows parsed')
+	println('${row_count} .obj Rows parsed')
 	// remove default part if empty
 	if obj_part.part.len > 1 && obj_part.part[0].faces.len == 0 {
 		obj_part.part = obj_part.part[1..]
@@ -304,9 +305,9 @@ pub fn (mut obj_part ObjPart) parse_obj_buffer(rows []string, single_material bo
 // load the materials if found the .mtl file
 fn (mut obj_part ObjPart) load_materials() {
 	rows := read_lines_from_file(obj_part.material_file)
-	println('Material file [$obj_part.material_file] $rows.len Rows.')
+	println('Material file [${obj_part.material_file}] ${rows.len} Rows.')
 	for row in rows {
-		// println("$row")
+		// println("${row}")
 		mut i := 0
 		for true {
 			if i >= row.len {
@@ -350,7 +351,7 @@ fn (mut obj_part ObjPart) load_materials() {
 						break
 					}
 				}
-				// trasparency
+				// transparency
 				`d` {
 					if row[i + 1] == ` ` {
 						value, _ := get_float(row, i + 2)
@@ -375,6 +376,7 @@ fn (mut obj_part ObjPart) load_materials() {
 					break
 				}
 			}
+
 			i++
 		}
 	}
@@ -396,15 +398,15 @@ fn (mut obj_part ObjPart) load_materials() {
 // vertex data struct
 pub struct Vertex_pnct {
 pub mut:
-	x     f32 // poistion
-	y     f32
-	z     f32
-	nx    f32 // normal
-	ny    f32
-	nz    f32
-	color u32 = 0xFFFFFFFF // color
-	u     f32 // uv
-	v     f32
+	x  f32 // position
+	y  f32
+	z  f32
+	nx f32 // normal
+	ny f32
+	nz f32
+	// color u32 = 0xFFFFFFFF // color
+	u f32 // uv
+	v f32
 	// u u16   // for compatibility with D3D11
 	// v u16   // for compatibility with D3D11
 }
@@ -432,7 +434,7 @@ pub fn (mut obj_part ObjPart) get_buffer(in_part_list []int) Skl_buffer {
 	for in_part in in_part_list {
 		part := obj_part.part[in_part]
 		for fc, face in part.faces {
-			// println("$fc $face")
+			// println("${fc} ${face}")
 			// default 3 faces
 			mut v_seq := [0, 1, 2]
 			if face.len == 4 {
@@ -479,7 +481,7 @@ pub fn (mut obj_part ObjPart) get_buffer(in_part_list []int) Skl_buffer {
 				v_index := face[vertex_index][0] // vertex index
 				n_index := face[vertex_index][1] // normal index
 				t_index := face[vertex_index][2] // uv texture index
-				key := '${v_index}_${n_index}_$t_index'
+				key := '${v_index}_${n_index}_${t_index}'
 				if key !in cache {
 					cache[key] = v_count_index
 					mut pnct := Vertex_pnct{
@@ -503,7 +505,7 @@ pub fn (mut obj_part ObjPart) get_buffer(in_part_list []int) Skl_buffer {
 					out_buf.ibuf << u32(v_count_index)
 					v_count_index++
 				} else {
-					// println("Cache used! $key")
+					// println("Cache used! ${key}")
 					out_buf.ibuf << u32(cache[key])
 					cache_hit++
 				}
@@ -514,11 +516,11 @@ pub fn (mut obj_part ObjPart) get_buffer(in_part_list []int) Skl_buffer {
 	/*
 	println("------------")
 	for c1, x1 in out_buf.vbuf[..10] {
-		println("$c1 $x1")
+		println("${c1} ${x1}")
 	}
 	println(out_buf.ibuf[..10])
 	*/
-	// println("vbuf size: ${out_buf.vbuf.len} ibuf size: ${out_buf.ibuf.len} Cache hit: $cache_hit")
+	// println("vbuf size: ${out_buf.vbuf.len} ibuf size: ${out_buf.ibuf.len} Cache hit: ${cache_hit}")
 	out_buf.n_vertex = u32(out_buf.ibuf.len)
 	return out_buf
 }
@@ -529,10 +531,10 @@ pub fn (mut obj_part ObjPart) get_buffer(in_part_list []int) Skl_buffer {
 // print on the console the summary of the .obj model loaded
 pub fn (obj_part ObjPart) summary() {
 	println('---- Stats     ----')
-	println('vertices: $obj_part.v.len')
-	println('normals : $obj_part.vn.len')
-	println('uv      : $obj_part.vt.len')
-	println('parts   : $obj_part.part.len')
+	println('vertices: ${obj_part.v.len}')
+	println('normals : ${obj_part.vn.len}')
+	println('uv      : ${obj_part.vt.len}')
+	println('parts   : ${obj_part.part.len}')
 	// Parts
 	println('---- Parts     ----')
 	for c, x in obj_part.part {
@@ -540,17 +542,17 @@ pub fn (obj_part ObjPart) summary() {
 	}
 	// Materials
 	println('---- Materials ----')
-	println('Material dict: $obj_part.mat_map.keys()')
+	println('Material dict: ${obj_part.mat_map.keys()}')
 	for c, mat in obj_part.mat {
 		println('${c:3} [${mat.name:-16}]')
 		for k, v in mat.ks {
-			print('$k = $v')
+			print('${k} = ${v}')
 		}
 		for k, v in mat.ns {
-			println('$k = $v')
+			println('${k} = ${v}')
 		}
 		for k, v in mat.maps {
-			println('$k = $v')
+			println('${k} = ${v}')
 		}
 	}
 }
@@ -562,7 +564,7 @@ pub fn tst() {
 	//fname := "Forklift.obj"
 	fname := "cube.obj"
 	//fname := "Orange Robot 3D ObjPart.obj"
-	
+
 	mut obj := ObjPart{}
 	buf := os.read_lines(fname) or { panic(err.msg) }
 	obj.parse_obj_buffer(buf)
@@ -585,7 +587,7 @@ pub fn tst() {
 	ort := m4.ortho(0,300,0,200,0,0)
 	println(ort)
 	a := m4.vec3(0,0,0)
-	println("a: $a")
+	println("a: ${a}")
 	res := m4.mul_vec(ort, a)
 	println("res:\n${res}")
 	*/

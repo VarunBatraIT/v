@@ -1,9 +1,9 @@
 module time
 
-// parse returns time from a date string.
+// parse returns the time from a date string.
 //
 // TODO(playX): JS Date expects iso8061 format of strings and other formats
-// are implementation dependant, we probably want to implement parsing in JS.
+// are implementation dependent, we probably want to implement parsing in JS.
 pub fn parse(s string) Time {
 	mut res := Time{}
 	#let date = new Date(s.str)
@@ -19,6 +19,11 @@ pub fn parse(s string) Time {
 	return res
 }
 
-pub fn parse_iso8601(s string) ?Time {
+// parse_iso8601 parses the ISO 8601 time format yyyy-MM-ddTHH:mm:ss.dddddd+dd:dd as local time.
+// The fraction part is difference in milli seconds, and the last part is offset from UTC time.
+// Both can be +/- HH:mm .
+// See https://en.wikipedia.org/wiki/ISO_8601 .
+// Remarks: not all of ISO 8601 is supported; checks and support for leapseconds should be added.
+pub fn parse_iso8601(s string) !Time {
 	return parse(s)
 }

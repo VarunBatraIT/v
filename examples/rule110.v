@@ -33,11 +33,11 @@ fn main() {
 
 	mut generation_bin := []int{len: n}
 	for i in 0 .. n {
-		generation_bin[i] = rand.intn(2)
+		generation_bin[i] = rand.intn(2) or { 0 }
 	}
 	print('\n')
 
-	// println('Random generated first automaton content: $generation_bin')
+	// println('Random generated first automaton content: ${generation_bin}')
 	for _ in 0 .. n {
 		print_generation(generation_bin)
 		next_generation(mut generation_bin)

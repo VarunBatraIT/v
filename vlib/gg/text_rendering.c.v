@@ -1,26 +1,73 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license that can be found in the LICENSE file.
 module gg
 
+import fontstash
 import sokol.sfons
 import sokol.sgl
-import gx
 import os
+import os.font
 
-struct FT {
+pub struct FT {
 pub:
-	fons        &C.FONScontext
+	fons        &fontstash.Context = unsafe { nil }
 	font_normal int
 	font_bold   int
 	font_mono   int
 	font_italic int
-	scale       f32 = 1.0
+pub mut:
+	fonts_map map[string]int // for storing custom fonts, provided via cfg.family in draw_text()
+	scale     f32 = 1.0
+}
+
+pub enum HorizontalAlign {
+	left   = C.FONS_ALIGN_LEFT
+	center = C.FONS_ALIGN_CENTER
+	right  = C.FONS_ALIGN_RIGHT
+}
+
+pub enum VerticalAlign {
+	top      = C.FONS_ALIGN_TOP
+	middle   = C.FONS_ALIGN_MIDDLE
+	bottom   = C.FONS_ALIGN_BOTTOM
+	baseline = C.FONS_ALIGN_BASELINE
+}
+
+const initial_text_atlas_size = int($d('gg_text_buff_size', 2048))
+const max_text_atlas_size = 8192
+
+fn expand_atlas_callback(uptr voidptr, error i32, _val i32) {
+	if error != C.FONS_ATLAS_FULL {
+		return
+	}
+	fons := unsafe { &fontstash.Context(uptr) }
+	width, height := fons.get_atlas_size()
+	mut next_width := if width > 0 { width } else { initial_text_atlas_size }
+	mut next_height := if height > 0 { height } else { initial_text_atlas_size }
+	if next_width < max_text_atlas_size {
+		next_width = if next_width * 2 > max_text_atlas_size {
+			max_text_atlas_size
+		} else {
+			next_width * 2
+		}
+	}
+	if next_height < max_text_atlas_size {
+		next_height = if next_height * 2 > max_text_atlas_size {
+			max_text_atlas_size
+		} else {
+			next_height * 2
+		}
+	}
+	if next_width == width && next_height == height {
+		return
+	}
+	fons.expand_atlas(next_width, next_height)
 }
 
 fn new_ft(c FTConfig) ?&FT {
 	if c.font_path == '' {
 		if c.bytes_normal.len > 0 {
-			fons := sfons.create(512, 512, 1)
+			fons := sfons.create(initial_text_atlas_size, initial_text_atlas_size, 1)
 			bytes_normal := c.bytes_normal
 			bytes_bold := if c.bytes_bold.len > 0 {
 				c.bytes_bold
@@ -40,18 +87,14 @@ fn new_ft(c FTConfig) ?&FT {
 				debug_font_println('setting italic variant to normal')
 				bytes_normal
 			}
-
+			fons.set_error_callback(expand_atlas_callback, fons)
 			return &FT{
-				fons: fons
-				font_normal: C.fonsAddFontMem(fons, c'sans', bytes_normal.data, bytes_normal.len,
-					false)
-				font_bold: C.fonsAddFontMem(fons, c'sans', bytes_bold.data, bytes_bold.len,
-					false)
-				font_mono: C.fonsAddFontMem(fons, c'sans', bytes_mono.data, bytes_mono.len,
-					false)
-				font_italic: C.fonsAddFontMem(fons, c'sans', bytes_italic.data, bytes_italic.len,
-					false)
-				scale: c.scale
+				fons:        fons
+				font_normal: fons.add_font_mem('sans', bytes_normal.clone(), true)
+				font_bold:   fons.add_font_mem('sans', bytes_bold.clone(), true)
+				font_mono:   fons.add_font_mem('sans', bytes_mono.clone(), true)
+				font_italic: fons.add_font_mem('sans', bytes_italic.clone(), true)
+				scale:       c.scale
 			}
 		} else {
 			// Load default font
@@ -60,72 +103,88 @@ fn new_ft(c FTConfig) ?&FT {
 
 	if c.font_path == '' || !os.exists(c.font_path) {
 		$if !android {
-			println('failed to load font "$c.font_path"')
+			println('failed to load font "${c.font_path}"')
 			return none
 		}
 	}
 
 	mut normal_path := c.font_path
-	mut bytes := []byte{}
+	mut bytes := []u8{}
 	$if android {
 		// First try any filesystem paths
-		bytes = os.read_bytes(c.font_path) or { []byte{} }
+		bytes = os.read_bytes(c.font_path) or { []u8{} }
 		if bytes.len == 0 {
 			// ... then try the APK asset path
 			bytes = os.read_apk_asset(c.font_path) or {
-				println('failed to load font "$c.font_path"')
+				println('failed to load font "${c.font_path}"')
 				return none
 			}
 		}
 	} $else {
 		bytes = os.read_bytes(c.font_path) or {
-			println('failed to load font "$c.font_path"')
+			println('failed to load font "${c.font_path}"')
 			return none
 		}
 	}
 	mut bold_path := if c.custom_bold_font_path != '' {
 		c.custom_bold_font_path
 	} else {
-		get_font_path_variant(c.font_path, .bold)
+		font.get_path_variant(c.font_path, .bold)
 	}
 	bytes_bold := os.read_bytes(bold_path) or {
-		debug_font_println('failed to load font "$bold_path"')
+		debug_font_println('failed to load font "${bold_path}"')
 		bold_path = c.font_path
 		bytes
 	}
-	mut mono_path := get_font_path_variant(c.font_path, .mono)
+	mut mono_path := font.get_path_variant(c.font_path, .mono)
 	bytes_mono := os.read_bytes(mono_path) or {
-		debug_font_println('failed to load font "$mono_path"')
+		debug_font_println('failed to load font "${mono_path}"')
 		mono_path = c.font_path
 		bytes
 	}
-	mut italic_path := get_font_path_variant(c.font_path, .italic)
+	mut italic_path := font.get_path_variant(c.font_path, .italic)
 	bytes_italic := os.read_bytes(italic_path) or {
-		debug_font_println('failed to load font "$italic_path"')
+		debug_font_println('failed to load font "${italic_path}"')
 		italic_path = c.font_path
 		bytes
 	}
-	fons := sfons.create(512, 512, 1)
-	debug_font_println('Font used for font_normal : $normal_path')
-	debug_font_println('Font used for font_bold   : $bold_path')
-	debug_font_println('Font used for font_mono   : $mono_path')
-	debug_font_println('Font used for font_italic : $italic_path')
+	fons := sfons.create(initial_text_atlas_size, initial_text_atlas_size, 1)
+	debug_font_println('Font used for font_normal : ${normal_path}')
+	debug_font_println('Font used for font_bold   : ${bold_path}')
+	debug_font_println('Font used for font_mono   : ${mono_path}')
+	debug_font_println('Font used for font_italic : ${italic_path}')
+	fons.set_error_callback(expand_atlas_callback, fons)
 	return &FT{
-		fons: fons
-		font_normal: C.fonsAddFontMem(fons, c'sans', bytes.data, bytes.len, false)
-		font_bold: C.fonsAddFontMem(fons, c'sans', bytes_bold.data, bytes_bold.len, false)
-		font_mono: C.fonsAddFontMem(fons, c'sans', bytes_mono.data, bytes_mono.len, false)
-		font_italic: C.fonsAddFontMem(fons, c'sans', bytes_italic.data, bytes_italic.len,
-			false)
-		scale: c.scale
+		fons:        fons
+		font_normal: fons.add_font_mem('sans', bytes.clone(), true)
+		font_bold:   fons.add_font_mem('sans', bytes_bold.clone(), true)
+		font_mono:   fons.add_font_mem('sans', bytes_mono.clone(), true)
+		font_italic: fons.add_font_mem('sans', bytes_italic.clone(), true)
+		scale:       c.scale
 	}
 }
 
-pub fn (ctx &Context) set_cfg(cfg gx.TextCfg) {
+// set_text_cfg sets the current text configuration
+pub fn (ctx &Context) set_text_cfg(cfg TextCfg) {
 	if !ctx.font_inited {
 		return
 	}
-	if cfg.bold {
+	if cfg.family != '' {
+		// println('set text cfg family=${cfg.family}')
+		mut f := ctx.ft.fonts_map[cfg.family]
+		if f == 0 {
+			// No such font in the cache yet, create it
+			bytes := os.read_bytes(cfg.family) or {
+				debug_font_println('failed to load font "${cfg.family}"')
+				return
+			}
+			f = ctx.ft.fons.add_font_mem(cfg.family, bytes.clone(), true)
+			unsafe {
+				ctx.ft.fonts_map[cfg.family] = f
+			}
+		}
+		ctx.ft.fons.set_font(f)
+	} else if cfg.bold {
 		ctx.ft.fons.set_font(ctx.ft.font_bold)
 	} else if cfg.mono {
 		ctx.ft.fons.set_font(ctx.ft.font_mono)
@@ -137,23 +196,58 @@ pub fn (ctx &Context) set_cfg(cfg gx.TextCfg) {
 	scale := if ctx.ft.scale == 0 { f32(1) } else { ctx.ft.scale }
 	size := if cfg.mono { cfg.size - 2 } else { cfg.size }
 	ctx.ft.fons.set_size(scale * f32(size))
-	C.fonsSetAlign(ctx.ft.fons, int(cfg.align) | int(cfg.vertical_align))
-	color := C.sfons_rgba(cfg.color.r, cfg.color.g, cfg.color.b, cfg.color.a)
+	ctx.ft.fons.set_align(int(cfg.align) | int(cfg.vertical_align))
+	color := sfons.rgba(cfg.color.r, cfg.color.g, cfg.color.b, cfg.color.a)
 	if cfg.color.a != 255 {
-		sgl.load_pipeline(ctx.timage_pip)
+		sgl.load_pipeline(ctx.pipeline.alpha)
 	}
-	C.fonsSetColor(ctx.ft.fons, color)
+	ctx.ft.fons.set_color(color)
 	ascender := f32(0.0)
 	descender := f32(0.0)
 	lh := f32(0.0)
 	ctx.ft.fons.vert_metrics(&ascender, &descender, &lh)
 }
 
-pub fn (ctx &Context) draw_text(x int, y int, text_ string, cfg gx.TextCfg) {
+@[params]
+pub struct DrawTextParams {
+pub:
+	x    int
+	y    int
+	text string
+
+	color          Color           = black
+	size           int             = 16
+	align          HorizontalAlign = .left
+	vertical_align VerticalAlign   = .top
+	max_width      int
+	family         string
+	bold           bool
+	mono           bool
+	italic         bool
+}
+
+pub fn (ctx &Context) draw_text2(p DrawTextParams) {
+	ctx.draw_text(p.x, p.y, p.text, TextCfg{
+		color:          p.color
+		size:           p.size
+		align:          p.align
+		vertical_align: p.vertical_align
+		max_width:      p.max_width
+		family:         p.family
+		bold:           p.bold
+		mono:           p.mono
+		italic:         p.italic
+	}) // TODO: perf once it's the only function to draw text
+}
+
+// draw_text draws the string in `text_` starting at top-left position `x`,`y`.
+// Text settings can be provided with `cfg`.
+pub fn (ctx &Context) draw_text(x int, y int, text_ string, cfg TextCfg) {
 	$if macos {
 		if ctx.native_rendering {
-			if cfg.align == gx.align_right {
-				width := ctx.text_width(text_)
+			if cfg.align == align_right {
+				width := C.darwin_text_width_with_cfg(text_, cfg)
+				// println('draw text ctx.height = ${ctx.height}')
 				C.darwin_draw_string(x - width, ctx.height - y, text_, cfg)
 			} else {
 				C.darwin_draw_string(x, ctx.height - y, text_, cfg)
@@ -165,70 +259,80 @@ pub fn (ctx &Context) draw_text(x int, y int, text_ string, cfg gx.TextCfg) {
 		eprintln('gg: draw_text(): font not initialized')
 		return
 	}
-	// text := text_.trim_space() // TODO remove/optimize
+	// text := text_.trim_space() // TODO: remove/optimize
 	// mut text := text_
 	// if text.contains('\t') {
 	// text = text.replace('\t', '    ')
 	// }
-	ctx.set_cfg(cfg)
+	ctx.set_text_cfg(cfg)
 	scale := if ctx.ft.scale == 0 { f32(1) } else { ctx.ft.scale }
-	C.fonsDrawText(ctx.ft.fons, x * scale, y * scale, &char(text_.str), 0) // TODO: check offsets/alignment
+	ctx.ft.fons.draw_text(x * scale, y * scale, text_) // TODO: check offsets/alignment
 }
 
+// draw_text draws the string in `text_` starting at top-left position `x`,`y` using
+// default text settings.
 pub fn (ctx &Context) draw_text_def(x int, y int, text string) {
 	ctx.draw_text(x, y, text)
 }
 
-/*
-pub fn (mut gg FT) init_font() {
-}
-*/
+// flush prepares the font for use.
 pub fn (ft &FT) flush() {
 	sfons.flush(ft.fons)
 }
 
+@[inline]
+fn (ctx &Context) text_metrics(s string) (f32, [4]f32) {
+	mut bounds := [4]f32{}
+	advance := ctx.ft.fons.text_bounds(0, 0, s, &bounds[0])
+	return advance, bounds
+}
+
+// text_width returns the width of the `string` `s` in pixels.
 pub fn (ctx &Context) text_width(s string) int {
 	$if macos {
 		if ctx.native_rendering {
 			return C.darwin_text_width(s)
 		}
 	}
-	// ctx.set_cfg(cfg) TODO
+	// ctx.set_text_cfg(cfg) TODO
 	if !ctx.font_inited {
 		return 0
 	}
-	mut buf := [4]f32{}
-	C.fonsTextBounds(ctx.ft.fons, 0, 0, &char(s.str), 0, &buf[0])
-	if s.ends_with(' ') {
-		return int((buf[2] - buf[0]) / ctx.scale) +
-			ctx.text_width('i') // TODO fix this in fontstash?
-	}
-	res := int((buf[2] - buf[0]) / ctx.scale)
-	// println('TW "$s" = $res')
-	$if macos {
-		if ctx.native_rendering {
-			return res * 2
-		}
-	}
-	return int((buf[2] - buf[0]) / ctx.scale)
+	advance, _ := ctx.text_metrics(s)
+	return int(advance / ctx.scale)
 }
 
+// text_height returns the height of the `string` `s` in pixels.
 pub fn (ctx &Context) text_height(s string) int {
-	// ctx.set_cfg(cfg) TODO
+	// ctx.set_text_cfg(cfg) TODO
 	if !ctx.font_inited {
 		return 0
 	}
-	mut buf := [4]f32{}
-	C.fonsTextBounds(ctx.ft.fons, 0, 0, &char(s.str), 0, &buf[0])
-	return int((buf[3] - buf[1]) / ctx.scale)
+	_, bounds := ctx.text_metrics(s)
+	return int((bounds[3] - bounds[1]) / ctx.scale)
 }
 
+// text_size returns the width and height of the `string` `s` in pixels.
 pub fn (ctx &Context) text_size(s string) (int, int) {
-	// ctx.set_cfg(cfg) TODO
+	// ctx.set_text_cfg(cfg) TODO
 	if !ctx.font_inited {
 		return 0, 0
 	}
-	mut buf := [4]f32{}
-	C.fonsTextBounds(ctx.ft.fons, 0, 0, &char(s.str), 0, &buf[0])
-	return int((buf[2] - buf[0]) / ctx.scale), int((buf[3] - buf[1]) / ctx.scale)
+	advance, bounds := ctx.text_metrics(s)
+	return int(advance / ctx.scale), int((bounds[3] - bounds[1]) / ctx.scale)
+}
+
+// text_width returns the width of the `string` `s` in pixels.
+pub fn (ctx &Context) text_width_f(s string) f32 {
+	$if macos {
+		if ctx.native_rendering {
+			return C.darwin_text_width(s)
+		}
+	}
+	// ctx.set_text_cfg(cfg) TODO
+	if !ctx.font_inited {
+		return 0
+	}
+	advance, _ := ctx.text_metrics(s)
+	return advance / ctx.scale
 }

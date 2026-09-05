@@ -2,15 +2,9 @@ import term
 import rand
 import time
 
-const (
-	cell     = '█'
-	nothing  = ' '
-	switches = {
-		cell:    nothing
-		nothing: cell
-	}
-	transformers = [nothing, cell]
-)
+const cell = '█'
+const nothing = ' '
+const transformers = [nothing, cell]
 
 struct Game {
 mut:
@@ -37,7 +31,7 @@ fn (mut g Game) evolve() {
 		temp_grid << []string{}
 		for y in 0 .. g.grid[x].len {
 			count := g.get_surrounding_alive_count(x, y)
-			if count == 3 || ((g.grid[x][y] == cell) && count == 2) {
+			if count == 3 || (g.grid[x][y] == cell && count == 2) {
 				temp_grid[x] << cell
 			} else {
 				temp_grid[x] << nothing

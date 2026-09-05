@@ -11,22 +11,22 @@ pub interface DataI {
 	from_primeset(PrimeSet) DataI
 }
 
-pub fn (di DataI) cast<T>() DataI {
+pub fn (di DataI) cast[T]() DataI {
 	return T{}.from_primeset(di.to_primeset())
 }
 
 pub type PrimeCfg = PrimeSet
 
 pub fn (pc PrimeCfg) short() string {
-	return "r: '$pc.r' a: '$pc.a' b: '$pc.b'"
+	return "r: '${pc.r}' a: '${pc.a}' b: '${pc.b}'"
 }
 
-[heap]
+@[heap]
 pub struct PrimeSet {
 pub mut:
-	r string [required]
-	a string [required]
-	b string [required]
+	r string @[required]
+	a string @[required]
+	b string @[required]
 }
 
 pub fn (p PrimeSet) to_primeset() PrimeSet {
@@ -51,7 +51,7 @@ pub fn (p PrimeSet) str() string {
 
 fn extract_count(s string) int {
 	digits := '0123456789'.split('')
-	if (s == '') || !s.split('').any(it in digits) {
+	if s == '' || !s.split('').any(it in digits) {
 		return 0
 	}
 	ds := s.split('').filter(it in digits)
@@ -68,20 +68,20 @@ pub fn sizes() []string {
 //
 pub fn usage() string {
 	primes := read_toml_file()
-	return sizes().map('$it[..${primes[it].len}]').join('\n\t')
+	return sizes().map('${it}[..${primes[it].len}]').join('\n\t')
 }
 
 // reads the Map[string] []string from disk
 // and returns the parsed content
 fn read_toml_file() map[string][]string {
-	fp := os.join_path(@VROOT, prime.toml_path)
+	fp := os.join_path(@VEXEROOT, toml_path)
 
 	tm_doc := toml.parse_file(fp) or {
-		err_msg := 'expected $fp'
+		err_msg := 'expected ${fp}'
 		eprintln(err_msg)
 		panic(err)
 	}
-	// TODO what happens if this goes wrong ?
+	// TODO: what happens if this goes wrong ?
 	tm_primes := tm_doc.value('primes') as map[string]toml.Any
 
 	msg := 'expected a map[string][]string in TOML-data ? corrupt ?'
@@ -120,7 +120,7 @@ pub fn random_list(cfg []string) []string {
 			}
 			mut num := ''
 			for prime_count != 0 {
-				num = primes[prime_size][rand.int_in_range(0, primes[prime_size].len - 1)]
+				num = primes[prime_size][rand.int_in_range(0, primes[prime_size].len - 1) or { 0 }]
 				if num in p_list {
 					continue
 				}
@@ -137,24 +137,25 @@ pub fn random_list(cfg []string) []string {
 			return p_list
 		}
 	}
+
 	return p_list
 }
 
-pub fn random_set(cfg PrimeCfg) ?[]PrimeSet {
+pub fn random_set(cfg PrimeCfg) ![]PrimeSet {
 	p_lists := [
 		cfg.r.split('.'),
 		cfg.a.split('.'),
 		cfg.b.split('.'),
-	].map(random_list(it.map(it.trim_space().to_lower())))
+	].map(random_list(it.map(it.trim_space().to_lower_ascii())))
 
 	// test for empty lists
 	//
 	if p_lists.any(it.len == 0) {
 		msg := [
-			'bad config was :\n\n"$cfg"',
+			'bad config was :\n\n"${cfg}"',
 			"maybe try e.g { r: 'l.5' a: 'xxl.5 b: 'xl.10' } makes a set of 250",
-			'your config was { $cfg.short() }',
-			'sizes $usage()\n',
+			'your config was { ${cfg.short()} }',
+			'sizes ${usage()}\n',
 		].join('\n\n')
 
 		return error(msg)

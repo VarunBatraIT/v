@@ -1,147 +1,59 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license that can be found in the LICENSE file.
 module gg
 
-import os
-import gx
-
-enum FontVariant {
-	normal = 0
-	bold
-	mono
-	italic
-}
+pub const align_right = HorizontalAlign.right
+pub const align_left = HorizontalAlign.left
 
 struct FTConfig {
 	font_path             string
 	custom_bold_font_path string
 	scale                 f32 = 1.0
 	font_size             int
-	bytes_normal          []byte
-	bytes_bold            []byte
-	bytes_mono            []byte
-	bytes_italic          []byte
+	bytes_normal          []u8
+	bytes_bold            []u8
+	bytes_mono            []u8
+	bytes_italic          []u8
 }
 
 struct StringToRender {
 	x    int
 	y    int
 	text string
-	cfg  gx.TextCfg
+	cfg  TextCfg
 }
 
-pub fn system_font_path() string {
-	env_font := os.getenv('VUI_FONT')
-	if env_font != '' && os.exists(env_font) {
-		return env_font
-	}
-	$if windows {
-		debug_font_println('Using font "C:\\Windows\\Fonts\\arial.ttf"')
-		return 'C:\\Windows\\Fonts\\arial.ttf'
-	}
-	$if macos {
-		fonts := ['/System/Library/Fonts/SFNS.ttf', '/System/Library/Fonts/SFNSText.ttf',
-			'/Library/Fonts/Arial.ttf']
-		for font in fonts {
-			if os.is_file(font) {
-				debug_font_println('Using font "$font"')
-				return font
-			}
-		}
-	}
-	$if android {
-		xml_files := ['/system/etc/system_fonts.xml', '/system/etc/fonts.xml',
-			'/etc/system_fonts.xml', '/etc/fonts.xml', '/data/fonts/fonts.xml',
-			'/etc/fallback_fonts.xml']
-		font_locations := ['/system/fonts', '/data/fonts']
-		for xml_file in xml_files {
-			if os.is_file(xml_file) && os.is_readable(xml_file) {
-				xml := os.read_file(xml_file) or { continue }
-				lines := xml.split('\n')
-				mut candidate_font := ''
-				for line in lines {
-					if line.contains('<font') {
-						candidate_font = line.all_after('>').all_before('<').trim(' \n\t\r')
-						if candidate_font.contains('.ttf') {
-							for location in font_locations {
-								candidate_path := os.join_path(location, candidate_font)
-								if os.is_file(candidate_path) && os.is_readable(candidate_path) {
-									debug_font_println('Using font "$candidate_path"')
-									return candidate_path
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	mut fm := os.execute('fc-match -v -s -b')
-	if fm.exit_code == 0 {
-		lines := fm.output.split('\n')
-		for l in lines {
-			if l.contains('file:') && !l.contains('.ttc') {
-				font := l.find_between('"', '"')
-				debug_font_println('Using font "$font"')
-				return font
-			}
-		}
-	} else {
-		panic('fc-match failed to fetch system font')
-	}
-	panic('failed to init the font')
-}
-
-fn get_font_path_variant(font_path string, variant FontVariant) string {
-	// TODO: find some way to make this shorter and more eye-pleasant
-	// NotoSans, LiberationSans, DejaVuSans, Arial and SFNS should work
-	mut file := os.file_name(font_path)
-	mut fpath := font_path.replace(file, '')
-	file = file.replace('.ttf', '')
-
-	match variant {
-		.normal {}
-		.bold {
-			if fpath.ends_with('-Regular') {
-				file = file.replace('-Regular', '-Bold')
-			} else if file.starts_with('DejaVuSans') {
-				file += '-Bold'
-			} else if file.to_lower().starts_with('arial') {
-				file += 'bd'
-			} else {
-				file += '-bold'
-			}
-			$if macos {
-				if os.exists('SFNS-bold') {
-					file = 'SFNS-bold'
-				}
-			}
-		}
-		.italic {
-			if file.ends_with('-Regular') {
-				file = file.replace('-Regular', '-Italic')
-			} else if file.starts_with('DejaVuSans') {
-				file += '-Oblique'
-			} else if file.to_lower().starts_with('arial') {
-				file += 'i'
-			} else {
-				file += 'Italic'
-			}
-		}
-		.mono {
-			if !file.ends_with('Mono-Regular') && file.ends_with('-Regular') {
-				file = file.replace('-Regular', 'Mono-Regular')
-			} else if file.to_lower().starts_with('arial') {
-				// Arial has no mono variant
-			} else {
-				file += 'Mono'
-			}
-		}
-	}
-	return fpath + file + '.ttf'
-}
-
-[if debug_font ?]
+@[if debug_font ?]
 fn debug_font_println(s string) {
 	println(s)
+}
+
+@[markused; params]
+pub struct TextCfg {
+pub:
+	color          Color           = black
+	size           int             = 16
+	align          HorizontalAlign = .left
+	vertical_align VerticalAlign   = .top
+	max_width      int
+	family         string
+	bold           bool
+	mono           bool
+	italic         bool
+}
+
+// to_css_string returns a CSS compatible string of the TextCfg `cfg`.
+// For example: `'mono 14px serif'`.
+pub fn (cfg &TextCfg) to_css_string() string {
+	mut font_style := ''
+	if cfg.bold {
+		font_style += 'bold '
+	}
+	if cfg.mono {
+		font_style += 'mono '
+	}
+	if cfg.italic {
+		font_style += 'italic '
+	}
+	return '${font_style} ${cfg.size}px ${cfg.family}'
 }

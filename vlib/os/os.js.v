@@ -1,14 +1,34 @@
 module os
 
-#const $fs = require('fs');
-#const $path = require('path');
-#const tty = require('tty')
+$if js_node {
+	#var $fs = require('fs');
+	#var $path = require('path');
+	#var tty = require('tty')
+}
 
-pub const (
-	path_delimiter = '/'
-	path_separator = '/'
-	args           = []string{}
-)
+pub const path_delimiter = get_path_delimiter()
+pub const path_separator = get_path_separator()
+pub const path_devnull = '/dev/null' // TODO
+
+pub const args = []string{}
+
+const executable_suffixes = ['']
+
+fn get_path_delimiter() string {
+	delimiter := ':'
+	$if js_node {
+		#delimiter.str = $path.delimiter
+	}
+	return delimiter
+}
+
+fn get_path_separator() string {
+	separator := '/'
+	$if js_node {
+		#separator.str = $path.sep
+	}
+	return separator
+}
 
 fn init() {
 	$if js_node {
@@ -20,7 +40,7 @@ fn init() {
 // See http://pubs.opengroup.org/onlinepubs/9699919799/functions/realpath.html
 // Also https://insanecoding.blogspot.com/2007/11/pathmax-simply-isnt.html
 // and https://insanecoding.blogspot.com/2007/11/implementing-realpath-in-c.html
-// NB: this particular rabbit hole is *deep* ...
+// Note: this particular rabbit hole is *deep* ...
 pub fn real_path(fpath string) string {
 	$if js_node {
 		mut res := ''
@@ -48,7 +68,7 @@ pub fn getpid() int {
 
 // chmod change file access attributes of `path` to `mode`.
 // Octals like `0o600` can be used.
-pub fn chmod(path string, mode int) ? {
+pub fn chmod(path string, mode int) ! {
 	$if js_node {
 		#try {
 		#$fs.chmodSync(''+path,mode.valueOf())
@@ -62,7 +82,7 @@ pub fn chmod(path string, mode int) ? {
 
 // chown changes the owner and group attributes of `path` to `owner` and `group`.
 // Octals like `0o600` can be used.
-pub fn chown(path string, owner int, group int) ? {
+pub fn chown(path string, owner int, group int) ! {
 	$if js_node {
 		#try {
 		#$fs.chownSync(''+path,owner.valueOf(),group.valueOf())
@@ -102,17 +122,43 @@ pub fn join_path(base string, dirs ...string) string {
 	return res
 }
 
+pub fn join_path_single(base string, elem string) string {
+	// TODO: deprecate this
+	return join_path(base, elem)
+}
+
 pub fn execute(cmd string) Result {
 	mut exit_code := 0
-	mut stdout := ''
+	mut out := ''
 	#let commands = cmd.str.split(' ');
 	#let output = $child_process.spawnSync(commands[0],commands.slice(1,commands.length));
 	#exit_code = new int(output.status)
-	#stdout = new string(output.stdout + '')
+	#out = new string(output.stdout + '')
 
 	return Result{
 		exit_code: exit_code
-		output: stdout
+		output:    out
+	}
+}
+
+// exec starts the specified command with arguments, waits for it to complete, and returns its output.
+pub fn exec(args []string) Result {
+	if args.len == 0 {
+		return Result{
+			exit_code: -1
+			output:    'exec requires at least one argument'
+		}
+	}
+	mut exit_code := 0
+	mut out := ''
+	#let commands = args.arr.map((x) => x.valueOf() + '');
+	#let output = $child_process.spawnSync(commands[0], commands.slice(1, commands.length));
+	#exit_code = new int(output.status === null ? -1 : output.status)
+	#out = new string((output.stdout ? output.stdout + '' : '') + (output.stderr ? output.stderr + '' : ''))
+
+	return Result{
+		exit_code: exit_code
+		output:    out
 	}
 }
 
@@ -131,18 +177,18 @@ pub fn is_atty(fd int) int {
 	return res
 }
 
-pub fn glob(patterns ...string) ?[]string {
+pub fn glob(patterns ...string) ![]string {
 	panic('not yet implemented')
-	return none
+	return error('not yet implemented')
 }
 
-pub fn write_file_array(path string, buffer array) ? {
-	mut f := create(path) ?
-	f.write_array(buffer) ?
+pub fn write_file_array(path string, buffer array) ! {
+	mut f := create(path)!
+	f.write_array(buffer)!
 	f.close()
 }
 
-pub fn chdir(s string) ? {
+pub fn chdir(s string) ! {
 	#try { $process.chdir(s.str); } catch (e) { return error(new string('' + s)) }
 }
 
@@ -151,4 +197,11 @@ pub fn file_last_mod_unix(path string) int {
 	#mtime.val = Math.floor($fs.lstatSync(path.str).mtime.getTime() / 1000)
 
 	return mtime
+}
+
+pub fn ensure_folder_is_writable(path string) ! {
+	fpath := join_path(path, 'some_newfile')
+	#try { $fs.writeFileSync(fpath); $fs.unlinkSync(fpath) } catch(e) { return error(new string('could not write to ' + path)) }
+
+	_ := fpath
 }

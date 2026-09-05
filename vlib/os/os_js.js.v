@@ -1,15 +1,15 @@
 module os
 
-pub fn mkdir(path string) ?bool {
+pub fn mkdir(path string, params MkdirParams) ! {
 	$if js_node {
 		if path == '.' {
-			return true
+			return
 		}
 		#$fs.mkdirSync(path.valueOf())
 
-		return true
+		return
 	} $else {
-		return false
+		return error('could not create folder')
 	}
 }
 
@@ -29,6 +29,26 @@ pub fn is_link(path string) bool {
 	return res
 }
 
+struct PathKind {
+	is_dir  bool
+	is_link bool
+}
+
+fn kind_of_existing_path(path string) PathKind {
+	link := false
+	directory := false
+	$if js_node {
+		#link.val = $fs.existsSync(path.str) && $fs.lstatSync(path.str).isSymbolicLink()
+		#directory.val = $fs.existsSync(path,str) && $fs.lstatSync(path.str).isDirectory()
+	} $else {
+		_ = path
+	}
+	return PathKind{
+		is_dir:  directory
+		is_link: link
+	}
+}
+
 pub fn exists(path string) bool {
 	res := false
 	$if js_node {
@@ -37,9 +57,9 @@ pub fn exists(path string) bool {
 	return res
 }
 
-pub fn ls(path string) ?[]string {
+pub fn ls(path string) ![]string {
 	if !is_dir(path) {
-		return error('ls(): cannot open dir $dir')
+		return error('ls(): cannot open dir ${dir}')
 	}
 
 	result := []string{}
@@ -63,7 +83,7 @@ pub fn is_executable(path string) bool {
 	return false
 }
 
-pub fn rmdir(path string) ? {
+pub fn rmdir(path string) ! {
 	$if js_node {
 		err := ''
 		#try {
@@ -77,7 +97,7 @@ pub fn rmdir(path string) ? {
 	}
 }
 
-pub fn rm(path string) ? {
+pub fn rm(path string) ! {
 	$if js_node {
 		err := ''
 		#try {
@@ -91,7 +111,12 @@ pub fn rm(path string) ? {
 	}
 }
 
-pub fn cp(src string, dst string) ? {
+@[params]
+pub struct CopyParams {
+	fail_if_exists bool
+}
+
+pub fn cp(src string, dst string, config CopyParams) ! {
 	$if js_node {
 		err := ''
 		#try {
@@ -105,7 +130,21 @@ pub fn cp(src string, dst string) ? {
 	}
 }
 
-pub fn read_file(s string) ?string {
+pub fn rename(src string, dst string) ! {
+	$if js_node {
+		err := ''
+		#try {
+		#$fs.renameSync(src.str,dst.str);
+		#return;
+		#} catch (e) {
+		#err.str = 'failed to rename ' + src.str + ' to ' + dst.str + ': ' + e.toString();
+		#}
+
+		return error(err)
+	}
+}
+
+pub fn read_file(s string) !string {
 	mut err := ''
 	err = err
 	res := ''
@@ -124,4 +163,36 @@ pub fn getwd() string {
 	#res.str = $process.cwd()
 
 	return res
+}
+
+pub fn getuid() int {
+	res := 0
+	#if (process.getuid) res.val = process.getuid();
+
+	return res
+}
+
+pub fn execvp(cmd string, args []string) ! {
+	panic('os.execvp() is not available on JS backend')
+}
+
+pub fn stdin_resume() {
+	#$process.stdin.resume();
+}
+
+pub fn is_readable(path string) bool {
+	$if js_node {
+		res := false
+		#try { res.val = $fs.accessSync(path.str,$fs.constants.R_OK); } catch { res.val = false; }
+
+		return res
+	} $else {
+		return false
+	}
+}
+
+// get_long_path has no meaning for *nix, but has for windows, where `c:\folder\some~1` for example
+// can be the equivalent of `c:\folder\some spa ces`. On *nix, it just returns a copy of the input path.
+fn get_long_path(path string) !string {
+	return path
 }

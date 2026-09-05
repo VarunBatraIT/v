@@ -1,0 +1,152 @@
+module main
+
+// The V3 compiler is linked directly into `cmd/v` on macOS and Linux. The
+// command shell hands C-backend compilations to it in-process while leaving
+// tool commands and other backends on their existing external-tool paths.
+import os
+import v.pref
+import v.util
+
+const macos_v3_fallback_file_env = 'V_MACOS_V3_FALLBACK_FILE'
+const macos_v3_c_error_dir_env = 'V_MACOS_V3_C_ERROR_DIR'
+const macos_v3_vhash_env = 'V_MACOS_V3_VHASH'
+const macos_v3_vcurrent_hash_env = 'V_MACOS_V3_VCURRENT_HASH'
+const macos_v3_caller_vexe_env = 'V_MACOS_V3_CALLER_VEXE'
+const macos_v3_caller_vexe_present_env = 'V_MACOS_V3_CALLER_VEXE_PRESENT'
+const macos_v3_caller_vchild_env = 'V_MACOS_V3_CALLER_VCHILD'
+const macos_v3_caller_vchild_present_env = 'V_MACOS_V3_CALLER_VCHILD_PRESENT'
+const macos_v3_caller_no_fallback_env = 'V_MACOS_V3_CALLER_NO_FALLBACK'
+const macos_v3_caller_no_fallback_present_env = 'V_MACOS_V3_CALLER_NO_FALLBACK_PRESENT'
+const macos_v3_embedded_env = 'V_MACOS_V3_EMBEDDED'
+const macos_v3_retry_env = 'V_MACOS_V3_RETRY'
+const macos_v3_no_fallback_env = 'V_MACOS_V3_NO_FALLBACK'
+
+fn maybe_delegate_to_macos_v3(command string, prefs &pref.Preferences) {
+	if !is_macos_v3_relevant_command(command, prefs) {
+		return
+	}
+	if !macos_v3_driver_is_available() {
+		if prefs.new_compiler {
+			eprintln('`-new-compiler` requires a build that embeds the V3 compiler, which this one does not.')
+			exit(1)
+		}
+		return
+	}
+	if prefs.old_compiler {
+		eprintln('`-old-compiler` is not available: this V executable contains only the V3 compiler.')
+		exit(1)
+	}
+	if message := macos_v3_fastc_incompatibility(prefs) {
+		eprintln(message)
+		exit(1)
+	}
+	if prefs.new_compiler && macos_v3_explicit_autofree_is_unsupported(prefs) {
+		eprintln('`-new-compiler` cannot be combined with `-autofree`: the embedded V3 compiler does not include ownership support.')
+		exit(1)
+	}
+	all_args := util.join_env_vflags_and_os_args()
+	launch_macos_v3_compiler(prefs, all_args[1..])
+}
+
+fn is_macos_v3_relevant_command(command string, prefs &pref.Preferences) bool {
+	if prefs.backend != .c || command == 'test' || command in external_tools
+		|| macos_v3_non_compilation_command(command) || prefs.path == '' {
+		return false
+	}
+	normalized_path := prefs.path.replace('\\', '/').trim_right('/')
+	return command in ['run', 'build'] || prefs.is_script || os.is_dir(prefs.path)
+		|| normalized_path.ends_with('.v') || normalized_path.ends_with('.vsh')
+		|| normalized_path.ends_with('.vv')
+}
+
+@[noreturn]
+fn launch_macos_v3_compiler(prefs &pref.Preferences, raw_args []string) {
+	vexe := pref.vexe_path()
+	util.set_vroot_folder(os.dir(vexe))
+	forwarded_args := macos_v3_forwarded_args(prefs, raw_args)
+	if prefs.is_verbose {
+		println('Running V3 compiler in process: ${util.args_quote_paths(forwarded_args)}')
+	}
+	dispatch_environment := os.environ()
+	caller_environment := macos_v3_original_caller_environment(dispatch_environment)
+	environment := macos_v3_child_environment(vexe, caller_environment, dispatch_environment)
+	replace_macos_v3_process_environment(environment)
+	macos_v3_driver_run(forwarded_args)
+	exit(0)
+}
+
+fn preserve_macos_v3_caller_environment_value(mut environment map[string]string, caller_environment map[string]string, name string, value_name string, present_name string) {
+	if present := caller_environment[present_name] {
+		if present in ['0', '1'] {
+			environment[value_name] = caller_environment[value_name] or { '' }
+			environment[present_name] = present
+			return
+		}
+	}
+	if value := caller_environment[name] {
+		environment[value_name] = value
+		environment[present_name] = '1'
+	} else {
+		environment[value_name] = ''
+		environment[present_name] = '0'
+	}
+}
+
+fn replace_macos_v3_process_environment(environment map[string]string) {
+	current := os.environ()
+	for name, _ in current {
+		if name !in environment {
+			os.unsetenv(name)
+		}
+	}
+	for name, value in environment {
+		os.setenv(name, value, true)
+	}
+}
+
+fn macos_v3_child_environment(vexe string, caller_environment map[string]string, dispatch_environment map[string]string) map[string]string {
+	mut environment := dispatch_environment.clone()
+	preserve_macos_v3_caller_environment_value(mut environment, caller_environment, 'VEXE', macos_v3_caller_vexe_env, macos_v3_caller_vexe_present_env)
+	preserve_macos_v3_caller_environment_value(mut environment, caller_environment, 'VCHILD', macos_v3_caller_vchild_env, macos_v3_caller_vchild_present_env)
+	preserve_macos_v3_caller_environment_value(mut environment, caller_environment, macos_v3_no_fallback_env, macos_v3_caller_no_fallback_env, macos_v3_caller_no_fallback_present_env)
+	for private_name in [macos_v3_fallback_file_env, macos_v3_c_error_dir_env, macos_v3_retry_env] {
+		environment.delete(private_name)
+	}
+	environment['VCHILD'] = 'true'
+	environment['VEXE'] = os.real_path(vexe)
+	environment[macos_v3_vhash_env] = @VHASH
+	environment[macos_v3_vcurrent_hash_env] = @VCURRENTHASH
+	environment[macos_v3_embedded_env] = '1'
+	return environment
+}
+
+fn macos_v3_original_caller_environment(dispatch_environment map[string]string) map[string]string {
+	mut caller_environment := dispatch_environment.clone()
+	vexe_present := dispatch_environment[macos_v3_caller_vexe_present_env] or { '' }
+	vchild_present := dispatch_environment[macos_v3_caller_vchild_present_env] or { '' }
+	if vexe_present in ['0', '1'] && vchild_present in ['0', '1'] {
+		restore_macos_v3_caller_environment_value(mut caller_environment, dispatch_environment, 'VEXE', macos_v3_caller_vexe_env, macos_v3_caller_vexe_present_env)
+		restore_macos_v3_caller_environment_value(mut caller_environment, dispatch_environment, 'VCHILD', macos_v3_caller_vchild_env, macos_v3_caller_vchild_present_env)
+	}
+	no_fallback_present := dispatch_environment[macos_v3_caller_no_fallback_present_env] or { '' }
+	if no_fallback_present in ['0', '1'] {
+		restore_macos_v3_caller_environment_value(mut caller_environment, dispatch_environment, macos_v3_no_fallback_env, macos_v3_caller_no_fallback_env, macos_v3_caller_no_fallback_present_env)
+	}
+	for private_name in [macos_v3_fallback_file_env, macos_v3_c_error_dir_env, macos_v3_vhash_env,
+		macos_v3_vcurrent_hash_env, macos_v3_embedded_env, macos_v3_retry_env,
+		'V3_CRUN_BUILD_IDENTITY', 'V3_INTERNAL_RESTART', macos_v3_caller_vexe_env,
+		macos_v3_caller_vexe_present_env, macos_v3_caller_vchild_env,
+		macos_v3_caller_vchild_present_env, macos_v3_caller_no_fallback_env,
+		macos_v3_caller_no_fallback_present_env] {
+		caller_environment.delete(private_name)
+	}
+	return caller_environment
+}
+
+fn restore_macos_v3_caller_environment_value(mut caller_environment map[string]string, dispatch_environment map[string]string, name string, value_name string, present_name string) {
+	if dispatch_environment[present_name] or { '' } == '1' {
+		caller_environment[name] = dispatch_environment[value_name] or { '' }
+	} else {
+		caller_environment.delete(name)
+	}
+}

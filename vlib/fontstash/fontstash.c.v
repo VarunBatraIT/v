@@ -1,14 +1,19 @@
 module fontstash
 
 #flag -I @VEXEROOT/thirdparty/fontstash
+
+@[use_once]
 #define FONTSTASH_IMPLEMENTATION
 $if gcboehm ? {
 	#define FONTSTASH_MALLOC GC_MALLOC
 	#define FONTSTASH_REALLOC GC_REALLOC
 	#define FONTSTASH_FREE GC_FREE
+	#define FONTSTASH_MALLOC_ATOMIC GC_MALLOC_ATOMIC
 }
 #include "fontstash.h"
-#flag -I /usr/local/Cellar/freetype/2.10.2/include/freetype2
+#flag darwin -I/usr/local/Cellar/freetype/2.10.2/include/freetype2
+
+fn C.GC_MALLOC_ATOMIC(n usize) voidptr
 
 $if windows {
 	$if tinyc {
@@ -18,155 +23,294 @@ $if windows {
 	#flag -lm
 }
 
-//#flag -lfreetype
-pub const (
-	// TODO: fontstash.used_import is used to keep v from warning about unused imports
-	used_import = 1
-)
+pub type Context = C.FONScontext
 
-// Contructor and destructor.
-[inline]
-pub fn create_internal(params &C.FONSparams) &C.FONScontext {
+//#flag -lfreetype
+pub const invalid = C.FONS_INVALID
+
+// create_internal returns a fontstash Context allocated on the heap.
+//
+// See also: delete_internal
+@[inline]
+pub fn create_internal(params &C.FONSparams) &Context {
 	return C.fonsCreateInternal(params)
 }
 
-[inline]
-pub fn delete_internal(s &C.FONScontext) {
+// delete_internal deletes and free memory of `s` fontstash Context.
+//
+// See also: create_internal
+@[inline]
+pub fn delete_internal(s &Context) {
 	C.fonsDeleteInternal(s)
 }
 
-[inline]
-pub fn (s &C.FONScontext) set_error_callback(callback fn (voidptr, int, int), uptr voidptr) {
+// set_error_callback sets `callback` as a function to be called if fontstash
+// encounter any errors. `uptr` can be used to pass custom userdata.
+@[inline]
+pub fn (s &Context) set_error_callback(callback fn (voidptr, i32, i32), uptr voidptr) {
 	C.fonsSetErrorCallback(s, callback, uptr)
 }
 
-// Returns current atlas size.
-[inline]
-pub fn (s &C.FONScontext) get_atlas_size(width &int, height &int) {
-	C.fonsGetAtlasSize(s, width, height)
+// get_atlas_size returns the current size of the texture atlas which
+// the font is rendered to.
+@[inline]
+pub fn (s &Context) get_atlas_size() (int, int) {
+	mut width := i32(0)
+	mut height := i32(0)
+	C.fonsGetAtlasSize(s, &width, &height)
+	return int(width), int(height)
 }
 
-// Expands the atlas size.
-[inline]
-pub fn (s &C.FONScontext) expand_atlas(width int, height int) int {
+// expand_atlas expands the font texture atlas size to `width` x `height`.
+@[inline]
+pub fn (s &Context) expand_atlas(width int, height int) int {
 	return C.fonsExpandAtlas(s, width, height)
 }
 
-// Resets the whole stash.
-[inline]
-pub fn (s &C.FONScontext) reset_atlas(width int, height int) int {
+// reset_atlas resets `width` x `height` of the font texture atlas.
+@[inline]
+pub fn (s &Context) reset_atlas(width int, height int) int {
 	return C.fonsResetAtlas(s, width, height)
 }
 
-// Add fonts
-[inline]
-pub fn (s &C.FONScontext) get_font_by_name(name &char) int {
-	return C.fonsGetFontByName(s, name)
+// get_font_by_name returns the id of the font with `name` or
+// `fontstash.invalid` if no font with `name` could be found.
+@[inline]
+pub fn (s &Context) get_font_by_name(name string) int {
+	return C.fonsGetFontByName(s, &char(name.str))
 }
 
-[inline]
-pub fn (s &C.FONScontext) add_fallback_font(base int, fallback int) int {
+// add_fallback_font adds a fallback font to the `base` font id in the Context.
+// `fallback` is expected to be the id of a previous, successfully, added font.
+// add_fallback_font returns `1` on success, `0` otherwise.
+@[inline]
+pub fn (s &Context) add_fallback_font(base int, fallback int) int {
 	return C.fonsAddFallbackFont(s, base, fallback)
 }
 
-[inline]
-pub fn (s &C.FONScontext) add_font_mem(name &char, data &byte, data_size int, free_data int) int {
-	return C.fonsAddFontMem(s, name, data, data_size, free_data)
+// add_font_mem adds the font data located in memory to the Context.
+// `name` is the human readable name for the font.
+// `free_data` indicates if `data` should be freed after the font is added.
+// The function returns the id of the font on success, `fontstash.invalid` otherwise.
+@[inline]
+pub fn (s &Context) add_font_mem(name string, data []u8, free_data bool) int {
+	if !free_data {
+		return C.fonsAddFontMem(s, &char(name.str), data.data, data.len, 0)
+	}
+	// A V array allocation can store ownership metadata immediately before
+	// `data.data`; fontstash must not pass that interior pointer to C free().
+	// Give it an allocation made by the allocator paired with FONTSTASH_FREE.
+	unsafe {
+		data_len := data.len
+		mut owned := &u8(nil)
+		$if gcboehm ? {
+			owned = &u8(C.GC_MALLOC_ATOMIC(usize(data_len)))
+		} $else {
+			owned = &u8(C.malloc(usize(data_len)))
+		}
+		if data_len > 0 && owned == nil {
+			data.free()
+			return invalid
+		}
+		if data_len > 0 {
+			vmemcpy(owned, data.data, data_len)
+		}
+		data.free()
+		return C.fonsAddFontMem(s, &char(name.str), owned, data_len, 1)
+	}
 }
 
-// State handling
-[inline]
-pub fn (s &C.FONScontext) push_state() {
+// push_state pushes a new state on the state stack.
+// A state holds the current attributes of the rendering,
+// attributes are things like color, size, the font in use, blur effect etc.
+//
+// See also: pop_state
+// See also: clear_state
+// See also: set_size
+// See also: set_color
+// See also: set_spacing
+// See also: set_blur
+// See also: set_align
+// See also: set_font
+@[inline]
+pub fn (s &Context) push_state() {
 	C.fonsPushState(s)
 }
 
-[inline]
-pub fn (s &C.FONScontext) pop_state() {
+// pop_state pops the current state from the state stack.
+//
+// See also: push_state
+// See also: clear_state
+@[inline]
+pub fn (s &Context) pop_state() {
 	C.fonsPopState(s)
 }
 
-[inline]
-pub fn (s &C.FONScontext) clear_state() {
+// clear_state clears the current state.
+//
+// See also: push_state
+// See also: pop_state
+@[inline]
+pub fn (s &Context) clear_state() {
 	C.fonsClearState(s)
 }
 
-// State setting
-[inline]
-pub fn (s &C.FONScontext) set_size(size f32) {
+// set_size sets the font size to `size` on the active state.
+//
+// See also: push_state
+// See also: pop_state
+// See also: clear_state
+@[inline]
+pub fn (s &Context) set_size(size f32) {
 	C.fonsSetSize(s, size)
 }
 
-[inline]
-pub fn (s &C.FONScontext) set_color(color u32) {
+// set_color sets the font color to `color` on the active state.
+//
+// See also: push_state
+// See also: pop_state
+// See also: clear_state
+@[inline]
+pub fn (s &Context) set_color(color u32) {
 	C.fonsSetColor(s, color)
 }
 
-[inline]
-pub fn (s &C.FONScontext) set_spacing(spacing f32) {
+// set_spacing sets the font spacing to `spacing` on the active state.
+//
+// See also: push_state
+// See also: pop_state
+// See also: clear_state
+@[inline]
+pub fn (s &Context) set_spacing(spacing f32) {
 	C.fonsSetSpacing(s, spacing)
 }
 
-[inline]
-pub fn (s &C.FONScontext) set_blur(blur f32) {
+// set_blur sets the font blur effect to `blur` on the active state.
+//
+// See also: push_state
+// See also: pop_state
+// See also: clear_state
+@[inline]
+pub fn (s &Context) set_blur(blur f32) {
 	C.fonsSetBlur(s, blur)
 }
 
-[inline]
-pub fn (s &C.FONScontext) set_align(align int) {
-	C.fonsSetAlign(s, align)
+// set_align sets the font aligning to `align` on the active state.
+//
+// See also: push_state
+// See also: pop_state
+// See also: clear_state
+@[inline]
+pub fn (s &Context) set_align(align int) {
+	C.fonsSetAlign(s, int(align))
 }
 
-[inline]
-pub fn (s &C.FONScontext) set_font(font int) {
-	C.fonsSetFont(s, font)
+// set_alignment sets the font aligning to the `align` flags.
+//
+// See also: push_state
+// See also: pop_state
+// See also: clear_state
+@[inline]
+pub fn (s &Context) set_alignment(align Align) {
+	C.fonsSetAlign(s, int(align))
 }
 
-// Draw text
-[inline]
-pub fn (s &C.FONScontext) draw_text(x f32, y f32, str &char, end &char) f32 {
-	return C.fonsDrawText(s, x, y, str, end)
+// set_font sets the font used for this render on the active state.
+// `font_id` is the id of the loaded font.
+//
+// See also: push_state
+// See also: pop_state
+// See also: clear_state
+@[inline]
+pub fn (s &Context) set_font(font_id int) {
+	C.fonsSetFont(s, font_id)
 }
 
-// Measure text
-[inline]
-pub fn (s &C.FONScontext) text_bounds(x f32, y f32, str &char, end &char, bounds &f32) f32 {
-	return C.fonsTextBounds(s, x, y, str, end, bounds)
+// draw_text draws the `text` string at position `x`,`y`.
+// The function returns the `x` coordinate of the resulting render.
+@[inline]
+pub fn (s &Context) draw_text(x f32, y f32, text string) f32 {
+	return C.fonsDrawText(s, x, y, &char(text.str), &char(unsafe { nil }))
 }
 
-[inline]
-pub fn (s &C.FONScontext) line_bounds(y f32, miny &f32, maxy &f32) {
+// text_bounds fills the `bounds` argument with the pixel dimensions
+// of the rendered `text` at position `x`,`y`.
+//
+// `bounds` is expected to be of type `mut bounds := [4]f32{}`.
+// Call example: `ctx.text_bounds(0, 0, 'example', &bounds[0])`.
+// `bounds[0]` is the `x` coordinate of the top-left point.
+// `bounds[1]` is the `y` coordinate of the top-left point.
+// `bounds[2]` is the `x` coordinate of the bottom-right point.
+// `bounds[3]` is the `y` coordinate of the bottom-right point.
+@[inline]
+pub fn (s &Context) text_bounds(x f32, y f32, text string, bounds &f32) f32 {
+	return C.fonsTextBounds(s, x, y, &char(text.str), &char(unsafe { nil }), bounds)
+}
+
+// line_bounds fills `miny` and `maxy` with the values of the `minimum`
+// and `maximum` line bounds respectively.
+@[inline]
+pub fn (s &Context) line_bounds(y f32, miny &f32, maxy &f32) {
 	C.fonsLineBounds(s, y, miny, maxy)
 }
 
-[inline]
-pub fn (s &C.FONScontext) vert_metrics(ascender &f32, descender &f32, lineh &f32) {
+// vert_metrics assigns the respective values of `ascender`, `descender` and `lineh`.
+@[inline]
+pub fn (s &Context) vert_metrics(ascender &f32, descender &f32, lineh &f32) {
 	C.fonsVertMetrics(s, ascender, descender, lineh)
 }
 
-// Text iterator
-[inline]
-pub fn (s &C.FONScontext) text_iter_init(iter &C.FONStextIter, x f32, y f32, str &char, end &char) int {
+// text_iter_init initializes the text iterator `iter`.
+@[inline]
+pub fn (s &Context) text_iter_init(iter &C.FONStextIter, x f32, y f32, str &char, end &char) int {
 	return C.fonsTextIterInit(s, iter, x, y, str, end)
 }
 
-[inline]
-pub fn (s &C.FONScontext) text_iter_next(iter &C.FONStextIter, quad &C.FONSquad) int {
+// text_iter_next advances `iter` to the next `quad`.
+@[inline]
+pub fn (s &Context) text_iter_next(iter &C.FONStextIter, quad &C.FONSquad) int {
 	return C.fonsTextIterNext(s, iter, quad)
 }
 
-// Pull texture changes
-[inline]
-pub fn (s &C.FONScontext) get_texture_data(width &int, height &int) &byte {
-	return &byte(C.fonsGetTextureData(s, width, height))
+// get_texture_data returns the current Context's raw texture data.
+// `width` and `height` is assigned the size of the texture dimensions.
+@[inline]
+pub fn (s &Context) get_texture_data(width &int, height &int) &u8 {
+	mut c_width := i32(unsafe { *width })
+	mut c_height := i32(unsafe { *height })
+	data := C.fonsGetTextureData(s, &c_width, &c_height)
+	unsafe {
+		*width = int(c_width)
+		*height = int(c_height)
+	}
+	return &u8(data)
 }
 
-[inline]
-pub fn (s &C.FONScontext) validate_texture(dirty &int) int {
-	return C.fonsValidateTexture(s, dirty)
+// validate_texture fills the `dirty` argument with the pixel dimensions
+// of the dirty rectangle of the Context's raw texture, if any.
+//
+// `dirty` is expected to be of type `mut dirty := [4]int{}`.
+// Call example: `is_dirty := ctx.validate_texture(&dirty[0])`.
+// The function returns `1` if the texture has a dirty rectangle, `0` otherwise.
+@[inline]
+pub fn (s &Context) validate_texture(dirty &int) int {
+	mut c_dirty := [4]i32{}
+	unsafe {
+		for i in 0 .. 4 {
+			c_dirty[i] = i32(dirty[i])
+		}
+	}
+	result := C.fonsValidateTexture(s, &c_dirty[0])
+	unsafe {
+		for i in 0 .. 4 {
+			dirty[i] = int(c_dirty[i])
+		}
+	}
+	return result
 }
 
-// Draws the stash texture for debugging
-[inline]
-pub fn (s &C.FONScontext) draw_debug(x f32, y f32) {
+// draw_debug draws the stash texture for debugging.
+@[inline]
+pub fn (s &Context) draw_debug(x f32, y f32) {
 	C.fonsDrawDebug(s, x, y)
 }

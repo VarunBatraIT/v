@@ -88,7 +88,7 @@ pub fn (a &Number) % (b &Number) Number {
 	return c
 }*/
 
-pub fn divmod(a &Number, b &Number) (Number, Number) {
+pub fn div_mod(a &Number, b &Number) (Number, Number) {
 	c := Number{}
 	d := Number{}
 	#c.value = a.val.value / b.val.value
@@ -137,37 +137,37 @@ pub fn (a &Number) isqrt() Number {
 	return b
 }
 
-pub fn b_and(a &Number, b &Number) Number {
+pub fn bitwise_and(a &Number, b &Number) Number {
 	c := Number{}
 	#c.value = a.val.value & b.val.value
 
 	return c
 }
 
-pub fn b_or(a &Number, b &Number) Number {
+pub fn bitwise_or(a &Number, b &Number) Number {
 	c := Number{}
 	#c.value = a.val.value | b.val.value
 
 	return c
 }
 
-pub fn b_xor(a &Number, b &Number) Number {
+pub fn bitwise_xor(a &Number, b &Number) Number {
 	c := Number{}
 	#c.value = a.val.value ^ b.val.value
 
 	return c
 }
 
-pub fn (a &Number) lshift(nbits int) Number {
+pub fn (a &Number) left_shift(amount int) Number {
 	c := Number{}
-	#c.value = a.val.value << BigInt(+nbits)
+	#c.value = a.val.value << BigInt(+amount)
 
 	return c
 }
 
-pub fn (a &Number) rshift(nbits int) Number {
+pub fn (a &Number) right_shift(amount int) Number {
 	c := Number{}
-	#c.value = a.val.value << BigInt(+nbits)
+	#c.value = a.val.value << BigInt(+amount)
 
 	return c
 }
@@ -193,6 +193,6 @@ pub fn factorial(nn &Number) Number {
 	return a
 }
 
-pub fn fact(n int) Number {
+pub fn factorial_int(n int) Number {
 	return factorial(from_int(n))
 }

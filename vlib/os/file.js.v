@@ -7,8 +7,9 @@ pub mut:
 	is_opened bool
 }
 
-#const $buffer = require('buffer');
-
+$if !js_browser {
+	#const $buffer = require('buffer');
+}
 // todo(playX):   __as_cast is broken here
 /*
 pub struct ErrFileNotOpened {
@@ -20,13 +21,13 @@ pub struct ErrSizeOfTypeIs0 {
 	code int
 }
 fn error_file_not_opened() IError {
-	return IError(&ErrFileNotOpened{})
+	return (&ErrFileNotOpened{})
 }
 fn error_size_of_type_0() IError {
-	return IError(&ErrSizeOfTypeIs0{})
+	return (&ErrSizeOfTypeIs0{})
 }
 */
-pub fn open_file(path string, mode string, options ...int) ?File {
+pub fn open_file(path string, mode string, options ...int) !File {
 	mut res := File{}
 	$if js_node {
 		#if (!options) { options = new array([]); }
@@ -46,53 +47,54 @@ pub fn open_file(path string, mode string, options ...int) ?File {
 }
 
 // open tries to open a file for reading and returns back a read-only `File` object.
-pub fn open(path string) ?File {
-	f := open_file(path, 'r') ?
+pub fn open(path string) !File {
+	f := open_file(path, 'r')!
 	return f
 }
 
-pub fn create(path string) ?File {
-	f := open_file(path, 'w') ?
+pub fn create(path string) !File {
+	f := open_file(path, 'w')!
 	return f
 }
 
 pub fn stdin() File {
 	return File{
-		fd: 0
+		fd:        0
 		is_opened: true
 	}
 }
 
 pub fn stdout() File {
 	return File{
-		fd: 1
+		fd:        1
 		is_opened: true
 	}
 }
 
 pub fn stderr() File {
 	return File{
-		fd: 2
+		fd:        2
 		is_opened: true
 	}
 }
 
-pub fn (f &File) read(mut buf []byte) ?int {
+pub fn (f &File) read(mut buf []u8) !int {
 	if buf.len == 0 {
 		return 0
 	}
 	mut nbytes := 0
 	#try {
-	#let buffer = $fs.readFileSync(f.val.fd.valueOf());
+	#let readBuffer = Buffer.alloc(buf.val.len.valueOf());
+	#nbytes = $fs.readSync(f.val.fd.valueOf(), readBuffer, 0, buf.val.len.valueOf(), null);
 	#
-	#for (const val of buffer.values()) { buf.arr[nbytes++] = val; }
+	#for (let i = 0; i < nbytes; i++) { buf.val.arr.arr[i] = new u8(readBuffer[i]); }
 	#}
 	#catch (e) { return error('' + e); }
 
 	return nbytes
 }
 
-pub fn (mut f File) write(buf []byte) ?int {
+pub fn (mut f File) write(buf []u8) !int {
 	if !f.is_opened {
 		return error('file is not opened')
 	}
@@ -106,13 +108,13 @@ pub fn (mut f File) write(buf []byte) ?int {
 
 // writeln writes the string `s` into the file, and appends a \n character.
 // It returns how many bytes were written, including the \n character.
-pub fn (mut f File) writeln(s string) ?int {
-	mut nbytes := f.write(s.bytes()) ?
-	nbytes += f.write('\n'.bytes()) ?
+pub fn (mut f File) writeln(s string) !int {
+	mut nbytes := f.write(s.bytes())!
+	nbytes += f.write('\n'.bytes())!
 	return nbytes
 }
 
-pub fn (mut f File) write_to(pos u64, buf []byte) ?int {
+pub fn (mut f File) write_to(pos u64, buf []u8) !int {
 	if !f.is_opened {
 		return error('file is not opened')
 	}
@@ -124,10 +126,10 @@ pub fn (mut f File) write_to(pos u64, buf []byte) ?int {
 	return nbytes
 }
 
-// write_string writes the string `s` into the file
+// write_string writes the string `s` into the file.
 // It returns how many bytes were actually written.
-pub fn (mut f File) write_string(s string) ?int {
-	nbytes := f.write(s.bytes()) ?
+pub fn (mut f File) write_string(s string) !int {
+	nbytes := f.write(s.bytes())!
 	return nbytes
 }
 
@@ -135,9 +137,9 @@ pub fn (mut f File) close() {
 	#$fs.closeSync(f.valueOf().fd.valueOf())
 }
 
-pub fn (mut f File) write_full_buffer(s voidptr, buffer_len usize) ? {}
+pub fn (mut f File) write_full_buffer(s voidptr, buffer_len usize) ! {}
 
-pub fn (mut f File) write_array(buffer array) ?int {
+pub fn (mut f File) write_array(buffer array) !int {
 	if !f.is_opened {
 		return error('file is not opened')
 	}

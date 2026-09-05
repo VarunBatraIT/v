@@ -1,77 +1,13 @@
 module sync
 
-import time
-import rand
+const infinite_timeout = i64(9223372036854775807)
+const select_state_scanning = u32(4294967295)
+const select_state_waiting = u32(4294967294)
+const select_state_claimed = u32(4294967293)
 
-$if windows {
-	#flag -I @VEXEROOT/thirdparty/stdatomic/win
-} $else {
-	#flag -I @VEXEROOT/thirdparty/stdatomic/nix
-}
-
-$if linux {
-	$if tinyc {
-		$if amd64 {
-			// most Linux distributions have /usr/lib/libatomic.so, but Ubuntu uses gcc version specific dir
-			#flag -L/usr/lib/gcc/x86_64-linux-gnu/6
-			#flag -L/usr/lib/gcc/x86_64-linux-gnu/7
-			#flag -L/usr/lib/gcc/x86_64-linux-gnu/8
-			#flag -L/usr/lib/gcc/x86_64-linux-gnu/9
-			#flag -L/usr/lib/gcc/x86_64-linux-gnu/10
-			#flag -L/usr/lib/gcc/x86_64-linux-gnu/11
-			#flag -L/usr/lib/gcc/x86_64-linux-gnu/12
-		} $else $if arm64 {
-			#flag -L/usr/lib/gcc/aarch64-linux-gnu/6
-			#flag -L/usr/lib/gcc/aarch64-linux-gnu/7
-			#flag -L/usr/lib/gcc/aarch64-linux-gnu/8
-			#flag -L/usr/lib/gcc/aarch64-linux-gnu/9
-			#flag -L/usr/lib/gcc/aarch64-linux-gnu/10
-			#flag -L/usr/lib/gcc/aarch64-linux-gnu/11
-			#flag -L/usr/lib/gcc/aarch64-linux-gnu/12
-		}
-		#flag -latomic
-	}
-}
-
-#include <atomic.h>
-// The following functions are actually generic in C
-fn C.atomic_load_ptr(voidptr) voidptr
-fn C.atomic_store_ptr(voidptr, voidptr)
-fn C.atomic_compare_exchange_weak_ptr(voidptr, voidptr, voidptr) bool
-fn C.atomic_compare_exchange_strong_ptr(voidptr, voidptr, voidptr) bool
-fn C.atomic_exchange_ptr(voidptr, voidptr) voidptr
-fn C.atomic_fetch_add_ptr(voidptr, voidptr) voidptr
-fn C.atomic_fetch_sub_ptr(voidptr, voidptr) voidptr
-
-fn C.atomic_load_u16(voidptr) u16
-fn C.atomic_store_u16(voidptr, u16)
-fn C.atomic_compare_exchange_weak_u16(voidptr, voidptr, u16) bool
-fn C.atomic_compare_exchange_strong_u16(voidptr, voidptr, u16) bool
-fn C.atomic_exchange_u16(voidptr, u16) u16
-fn C.atomic_fetch_add_u16(voidptr, u16) u16
-fn C.atomic_fetch_sub_u16(voidptr, u16) u16
-
-fn C.atomic_load_u32(voidptr) u32
-fn C.atomic_store_u32(voidptr, u32)
-fn C.atomic_compare_exchange_weak_u32(voidptr, voidptr, u32) bool
-fn C.atomic_compare_exchange_strong_u32(voidptr, voidptr, u32) bool
-fn C.atomic_exchange_u32(voidptr, u32) u32
-fn C.atomic_fetch_add_u32(voidptr, u32) u32
-fn C.atomic_fetch_sub_u32(voidptr, u32) u32
-
-fn C.atomic_load_u64(voidptr) u64
-fn C.atomic_store_u64(voidptr, u64)
-fn C.atomic_compare_exchange_weak_u64(voidptr, voidptr, u64) bool
-fn C.atomic_compare_exchange_strong_u64(voidptr, voidptr, u64) bool
-fn C.atomic_exchange_u64(voidptr, u64) u64
-fn C.atomic_fetch_add_u64(voidptr, u64) u64
-fn C.atomic_fetch_sub_u64(voidptr, u64) u64
-
-const (
-	// how often to try to get data without blocking before to wait for semaphore
-	spinloops     = 750
-	spinloops_sem = 4000
-)
+// how often to try to get data without blocking before to wait for semaphore
+const spinloops = u32(750)
+const spinloops_sem = u32(4000)
 
 enum BufferElemStat {
 	unused = 0
@@ -82,21 +18,42 @@ enum BufferElemStat {
 
 struct Subscription {
 mut:
-	sem  &Semaphore
-	prev &&Subscription
-	nxt  &Subscription
+	sem    &Semaphore = unsafe { nil }
+	state  &u32       = unsafe { nil }
+	objref voidptr
+	index  u32
+	prev   voidptr       = unsafe { nil }
+	nxt    &Subscription = unsafe { nil }
 }
 
-enum Direction {
+// append_subscription keeps select waiters in FIFO order, so the oldest waiter
+// is woken first when a channel becomes ready.
+fn append_subscription(head &&Subscription, sub &Subscription) {
+	unsafe {
+		mut link := head
+		for *link != 0 {
+			link = &(*link).nxt
+		}
+		sub.prev = voidptr(link)
+		sub.nxt = nil
+		*link = sub
+	}
+}
+
+pub enum Direction {
 	pop
 	push
 }
 
-struct Channel {
-	ringbuf   &byte // queue for buffered channels
-	statusbuf &byte // flags to synchronize write/read in ringbuf
+@[typedef]
+pub struct C.atomic_uintptr_t {}
+
+pub struct Channel {
+	ringbuf   &u8 = unsafe { nil } // queue for buffered channels
+	statusbuf &u8 = unsafe { nil } // flags to synchronize write/read in ringbuf
 	objsize   u32
-mut: // atomic
+mut:
+	// atomic
 	writesem           Semaphore // to wake thread that wanted to write, but buffer was full
 	readsem            Semaphore // to wake thread that wanted to read, but buffer was empty
 	writesem_im        Semaphore
@@ -105,22 +62,23 @@ mut: // atomic
 	read_adr           C.atomic_uintptr_t // if != NULL an obj can be read from here without wait
 	adr_read           C.atomic_uintptr_t // used to identify origin of writesem
 	adr_written        C.atomic_uintptr_t // used to identify origin of readsem
-	write_free         u32 // for queue state
+	write_free         u32                // for queue state
 	read_avail         u32
 	buf_elem_write_idx u32
 	buf_elem_read_idx  u32
 	// for select
-	write_subscriber &Subscription
-	read_subscriber  &Subscription
-	write_sub_mtx    u16
-	read_sub_mtx     u16
+	write_subscriber &Subscription = unsafe { nil }
+	read_subscriber  &Subscription = unsafe { nil }
+	write_sub_mtx    &SpinLock
+	read_sub_mtx     &SpinLock
 	closed           u16
+	close_err        IError = none
 pub:
 	cap u32 // queue length in #objects
 }
 
-pub fn new_channel<T>(n u32) &Channel {
-	st := sizeof(T)
+pub fn new_channel[T](n u32) &Channel {
+	st := if sizeof(T) > 0 { sizeof(T) } else { 1 }
 	if isreftype(T) {
 		return new_channel_st(n, st)
 	} else {
@@ -131,17 +89,19 @@ pub fn new_channel<T>(n u32) &Channel {
 fn new_channel_st(n u32, st u32) &Channel {
 	wsem := if n > 0 { n } else { 1 }
 	rsem := if n > 0 { u32(0) } else { 1 }
-	rbuf := if n > 0 { unsafe { malloc(int(n * st)) } } else { &byte(0) }
-	sbuf := if n > 0 { vcalloc_noscan(int(n * 2)) } else { &byte(0) }
+	rbuf := if n > 0 { unsafe { malloc(int(n * st)) } } else { &u8(unsafe { nil }) }
+	sbuf := if n > 0 { vcalloc_noscan(int(n * 2)) } else { &u8(unsafe { nil }) }
 	mut ch := Channel{
-		objsize: st
-		cap: n
-		write_free: n
-		read_avail: 0
-		ringbuf: rbuf
-		statusbuf: sbuf
-		write_subscriber: 0
-		read_subscriber: 0
+		objsize:          st
+		cap:              n
+		write_free:       n
+		read_avail:       0
+		ringbuf:          rbuf
+		statusbuf:        sbuf
+		write_subscriber: unsafe { nil }
+		read_subscriber:  unsafe { nil }
+		write_sub_mtx:    new_spin_lock()
+		read_sub_mtx:     new_spin_lock()
 	}
 	ch.writesem.init(wsem)
 	ch.readsem.init(rsem)
@@ -154,17 +114,19 @@ fn new_channel_st_noscan(n u32, st u32) &Channel {
 	$if gcboehm_opt ? {
 		wsem := if n > 0 { n } else { 1 }
 		rsem := if n > 0 { u32(0) } else { 1 }
-		rbuf := if n > 0 { unsafe { malloc_noscan(int(n * st)) } } else { &byte(0) }
-		sbuf := if n > 0 { vcalloc_noscan(int(n * 2)) } else { &byte(0) }
+		rbuf := if n > 0 { unsafe { malloc_noscan(int(n * st)) } } else { &u8(unsafe { nil }) }
+		sbuf := if n > 0 { vcalloc_noscan(int(n * 2)) } else { &u8(unsafe { nil }) }
 		mut ch := Channel{
-			objsize: st
-			cap: n
-			write_free: n
-			read_avail: 0
-			ringbuf: rbuf
-			statusbuf: sbuf
-			write_subscriber: 0
-			read_subscriber: 0
+			objsize:          st
+			cap:              n
+			write_free:       n
+			read_avail:       0
+			ringbuf:          rbuf
+			statusbuf:        sbuf
+			write_subscriber: unsafe { nil }
+			read_subscriber:  unsafe { nil }
+			write_sub_mtx:    new_spin_lock()
+			read_sub_mtx:     new_spin_lock()
 		}
 		ch.writesem.init(wsem)
 		ch.readsem.init(rsem)
@@ -176,92 +138,122 @@ fn new_channel_st_noscan(n u32, st u32) &Channel {
 	}
 }
 
-pub fn (ch &Channel) auto_str(typename string) string {
-	return 'chan $typename{cap: $ch.cap, closed: $ch.closed}'
-}
-
-pub fn (mut ch Channel) close() {
+// close closes the channel and optionally stores an error that will be
+// returned by receive operations that use `or {}` or `?` after the
+// buffered values have been drained.
+pub fn (mut ch Channel) close(errs ...IError) {
 	open_val := u16(0)
 	if !C.atomic_compare_exchange_strong_u16(&ch.closed, &open_val, 1) {
 		return
 	}
-	mut nulladr := voidptr(0)
-	for !C.atomic_compare_exchange_weak_ptr(unsafe { &voidptr(&ch.adr_written) }, &nulladr,
-		voidptr(-1)) {
-		nulladr = voidptr(0)
+	if errs.len > 0 {
+		ch.close_err = errs[0]
+	}
+	mut nulladr := unsafe { nil }
+	for !C.atomic_compare_exchange_weak_ptr(voidptr(&ch.adr_written), voidptr(&nulladr), isize(-1)) {
+		nulladr = unsafe { nil }
 	}
 	ch.readsem_im.post()
 	ch.readsem.post()
-	mut null16 := u16(0)
-	for !C.atomic_compare_exchange_weak_u16(&ch.read_sub_mtx, &null16, u16(1)) {
-		null16 = u16(0)
-	}
-	if ch.read_subscriber != voidptr(0) {
+	ch.read_sub_mtx.lock()
+	if ch.read_subscriber != unsafe { nil } {
 		ch.read_subscriber.sem.post()
 	}
-	C.atomic_store_u16(&ch.read_sub_mtx, u16(0))
-	null16 = u16(0)
-	for !C.atomic_compare_exchange_weak_u16(&ch.write_sub_mtx, &null16, u16(1)) {
-		null16 = u16(0)
-	}
-	if ch.write_subscriber != voidptr(0) {
+	ch.read_sub_mtx.unlock()
+	ch.write_sub_mtx.lock()
+	if ch.write_subscriber != unsafe { nil } {
 		ch.write_subscriber.sem.post()
 	}
-	C.atomic_store_u16(&ch.write_sub_mtx, u16(0))
+	ch.write_sub_mtx.unlock()
 	ch.writesem.post()
 	if ch.cap == 0 {
-		C.atomic_store_ptr(unsafe { &voidptr(&ch.read_adr) }, voidptr(0))
+		C.atomic_store_ptr(unsafe { &voidptr(&ch.read_adr) }, unsafe { nil })
 	}
 	ch.writesem_im.post()
+
+	// Do not destroy `read_sub_mtx` and `write_sub_mtx` here,
+	// because we can read from a closed channel later.
 }
 
-[inline]
+@[inline]
+fn (ch &Channel) closed_error() IError {
+	if ch.close_err !is None__ {
+		return ch.close_err
+	}
+	return error('channel closed')
+}
+
+@[inline]
 pub fn (mut ch Channel) len() int {
 	return int(C.atomic_load_u32(&ch.read_avail))
 }
 
-[inline]
+@[inline]
 pub fn (mut ch Channel) closed() bool {
 	return C.atomic_load_u16(&ch.closed) != 0
 }
 
-[inline]
+@[inline]
 pub fn (mut ch Channel) push(src voidptr) {
 	if ch.try_push_priv(src, false) == .closed {
 		panic('push on closed channel')
 	}
 }
 
-[inline]
+@[inline]
 pub fn (mut ch Channel) try_push(src voidptr) ChanState {
 	return ch.try_push_priv(src, true)
+}
+
+fn (mut ch Channel) try_push_to_select(src voidptr) bool {
+	ch.read_sub_mtx.lock()
+	defer {
+		ch.read_sub_mtx.unlock()
+	}
+	mut sub := ch.read_subscriber
+	for sub != unsafe { nil } {
+		mut expected := select_state_waiting
+		if C.atomic_compare_exchange_strong_u32(sub.state, &expected, select_state_claimed) {
+			unsafe {
+				C.memcpy(sub.objref, src, ch.objsize)
+			}
+			C.atomic_store_u32(sub.state, sub.index)
+			sub.sem.post()
+			return true
+		}
+		sub = sub.nxt
+	}
+	return false
 }
 
 fn (mut ch Channel) try_push_priv(src voidptr, no_block bool) ChanState {
 	if C.atomic_load_u16(&ch.closed) != 0 {
 		return .closed
 	}
-	spinloops_sem_, spinloops_ := if no_block { 1, 1 } else { sync.spinloops, sync.spinloops_sem }
+	spinloops_sem_, spinloops_ := if no_block { u32(1), u32(1) } else { spinloops, spinloops_sem }
 	mut have_swapped := false
 	for {
 		mut got_sem := false
 		mut wradr := C.atomic_load_ptr(unsafe { &voidptr(&ch.write_adr) })
 		for wradr != C.NULL {
-			if C.atomic_compare_exchange_strong_ptr(unsafe { &voidptr(&ch.write_adr) },
-				&wradr, voidptr(0))
+			if C.atomic_compare_exchange_strong_ptr(voidptr(&ch.write_adr), voidptr(&wradr),
+				isize(0))
 			{
 				// there is a reader waiting for us
 				unsafe { C.memcpy(wradr, src, ch.objsize) }
-				mut nulladr := voidptr(0)
-				for !C.atomic_compare_exchange_weak_ptr(unsafe { &voidptr(&ch.adr_written) },
-					&nulladr, wradr) {
-					nulladr = voidptr(0)
+				mut nulladr := unsafe { nil }
+				for !C.atomic_compare_exchange_weak_ptr(voidptr(&ch.adr_written),
+					voidptr(&nulladr), isize(wradr)) {
+					nulladr = unsafe { nil }
 				}
 				ch.readsem_im.post()
 				return .success
 			}
 		}
 		if no_block && ch.cap == 0 {
+			if ch.try_push_to_select(src) {
+				return .success
+			}
 			return .not_ready
 		}
 		// get token to read
@@ -288,8 +280,8 @@ fn (mut ch Channel) try_push_priv(src voidptr, no_block bool) ChanState {
 			wradr = C.atomic_load_ptr(unsafe { &voidptr(&ch.write_adr) })
 			if wradr != C.NULL {
 				mut src2 := src
-				if C.atomic_compare_exchange_strong_ptr(unsafe { &voidptr(&ch.read_adr) },
-					&src2, voidptr(0))
+				if C.atomic_compare_exchange_strong_ptr(voidptr(&ch.read_adr), voidptr(&src2),
+					isize(0))
 				{
 					ch.writesem.post()
 					continue
@@ -298,20 +290,16 @@ fn (mut ch Channel) try_push_priv(src voidptr, no_block bool) ChanState {
 				}
 			}
 			if !read_in_progress {
-				mut null16 := u16(0)
-				for !C.atomic_compare_exchange_weak_u16(voidptr(&ch.read_sub_mtx), &null16,
-					u16(1)) {
-					null16 = u16(0)
-				}
-				if ch.read_subscriber != voidptr(0) {
+				ch.read_sub_mtx.lock()
+				if ch.read_subscriber != unsafe { nil } {
 					ch.read_subscriber.sem.post()
 				}
-				C.atomic_store_u16(&ch.read_sub_mtx, u16(0))
+				ch.read_sub_mtx.unlock()
 			}
 			mut src2 := src
 			for sp := u32(0); sp < spinloops_ || read_in_progress; sp++ {
-				if C.atomic_compare_exchange_strong_ptr(unsafe { &voidptr(&ch.adr_read) },
-					&src2, voidptr(0))
+				if C.atomic_compare_exchange_strong_ptr(voidptr(&ch.adr_read), voidptr(&src2),
+					isize(0))
 				{
 					have_swapped = true
 					read_in_progress = true
@@ -334,7 +322,7 @@ fn (mut ch Channel) try_push_priv(src voidptr, no_block bool) ChanState {
 				}
 				if C.atomic_load_u16(&ch.closed) != 0 {
 					if have_swapped
-						|| C.atomic_compare_exchange_strong_ptr(unsafe { &voidptr(&ch.adr_read) }, &src2, voidptr(0)) {
+						|| C.atomic_compare_exchange_strong_ptr(voidptr(&ch.adr_read), voidptr(&src2), isize(0)) {
 						ch.writesem.post()
 						return .success
 					} else {
@@ -342,7 +330,7 @@ fn (mut ch Channel) try_push_priv(src voidptr, no_block bool) ChanState {
 					}
 				}
 				if have_swapped
-					|| C.atomic_compare_exchange_strong_ptr(unsafe { &voidptr(&ch.adr_read) }, &src2, voidptr(0)) {
+					|| C.atomic_compare_exchange_strong_ptr(voidptr(&ch.adr_read), voidptr(&src2), isize(0)) {
 					ch.writesem.post()
 					break
 				} else {
@@ -383,7 +371,7 @@ fn (mut ch Channel) try_push_priv(src voidptr, no_block bool) ChanState {
 				mut wr_ptr := ch.ringbuf
 				mut status_adr := ch.statusbuf
 				unsafe {
-					wr_ptr += wr_idx * ch.objsize
+					wr_ptr += (wr_idx * ch.objsize)
 					status_adr += wr_idx * sizeof(u16)
 				}
 				mut expected_status := u16(BufferElemStat.unused)
@@ -395,16 +383,13 @@ fn (mut ch Channel) try_push_priv(src voidptr, no_block bool) ChanState {
 					C.memcpy(wr_ptr, src, ch.objsize)
 				}
 				C.atomic_store_u16(unsafe { &u16(status_adr) }, u16(BufferElemStat.written))
-				C.atomic_fetch_add_u32(&ch.read_avail, 1)
+				C.atomic_fetch_add_u32(voidptr(&ch.read_avail), 1)
 				ch.readsem.post()
-				mut null16 := u16(0)
-				for !C.atomic_compare_exchange_weak_u16(&ch.read_sub_mtx, &null16, u16(1)) {
-					null16 = u16(0)
-				}
-				if ch.read_subscriber != voidptr(0) {
+				ch.read_sub_mtx.lock()
+				if ch.read_subscriber != unsafe { nil } {
 					ch.read_subscriber.sem.post()
 				}
-				C.atomic_store_u16(&ch.read_sub_mtx, u16(0))
+				ch.read_sub_mtx.unlock()
 				return .success
 			} else {
 				if no_block {
@@ -415,22 +400,53 @@ fn (mut ch Channel) try_push_priv(src voidptr, no_block bool) ChanState {
 		}
 	}
 	// we should not get here but the V compiler want's to see a return statement
-	assert false
-	return .success
+	panic('unknown `try_push_priv` state')
 }
 
-[inline]
+@[inline]
 pub fn (mut ch Channel) pop(dest voidptr) bool {
 	return ch.try_pop_priv(dest, false) == .success
 }
 
-[inline]
+// try_pop returns `.success` if an object is popped without blocking.
+// Pass the destination as `mut`: `ch.try_pop(mut value)`, not `ch.try_pop(&value)`.
+@[inline]
 pub fn (mut ch Channel) try_pop(dest voidptr) ChanState {
 	return ch.try_pop_priv(dest, true)
 }
 
+fn (mut ch Channel) try_pop_from_select(dest voidptr) bool {
+	ch.write_sub_mtx.lock()
+	defer {
+		ch.write_sub_mtx.unlock()
+	}
+	mut sub := ch.write_subscriber
+	for sub != unsafe { nil } {
+		mut expected := select_state_waiting
+		if C.atomic_compare_exchange_strong_u32(sub.state, &expected, select_state_claimed) {
+			unsafe {
+				C.memcpy(dest, sub.objref, ch.objsize)
+			}
+			C.atomic_store_u32(sub.state, sub.index)
+			sub.sem.post()
+			return true
+		}
+		sub = sub.nxt
+	}
+	return false
+}
+
+// try_pop_select_priv treats already closed channels as unavailable for non-blocking `select ... else`.
+@[inline]
+fn (mut ch Channel) try_pop_select_priv(dest voidptr) ChanState {
+	if C.atomic_load_u16(&ch.closed) != 0 {
+		return .closed
+	}
+	return ch.try_pop_priv(dest, true)
+}
+
 fn (mut ch Channel) try_pop_priv(dest voidptr, no_block bool) ChanState {
-	spinloops_sem_, spinloops_ := if no_block { 1, 1 } else { sync.spinloops, sync.spinloops_sem }
+	spinloops_sem_, spinloops_ := if no_block { u32(1), u32(1) } else { spinloops, spinloops_sem }
 	mut have_swapped := false
 	mut write_in_progress := false
 	for {
@@ -439,15 +455,15 @@ fn (mut ch Channel) try_pop_priv(dest voidptr, no_block bool) ChanState {
 			// unbuffered channel - first see if a `push()` has adversized
 			mut rdadr := C.atomic_load_ptr(unsafe { &voidptr(&ch.read_adr) })
 			for rdadr != C.NULL {
-				if C.atomic_compare_exchange_strong_ptr(unsafe { &voidptr(&ch.read_adr) },
-					&rdadr, voidptr(0))
+				if C.atomic_compare_exchange_strong_ptr(voidptr(&ch.read_adr), voidptr(&rdadr),
+					isize(0))
 				{
 					// there is a writer waiting for us
 					unsafe { C.memcpy(dest, rdadr, ch.objsize) }
-					mut nulladr := voidptr(0)
-					for !C.atomic_compare_exchange_weak_ptr(unsafe { &voidptr(&ch.adr_read) },
-						&nulladr, rdadr) {
-						nulladr = voidptr(0)
+					mut nulladr := unsafe { nil }
+					for !C.atomic_compare_exchange_weak_ptr(voidptr(&ch.adr_read),
+						voidptr(&nulladr), isize(rdadr)) {
+						nulladr = unsafe { nil }
 					}
 					ch.writesem_im.post()
 					return .success
@@ -455,6 +471,9 @@ fn (mut ch Channel) try_pop_priv(dest voidptr, no_block bool) ChanState {
 			}
 			if no_block {
 				if C.atomic_load_u16(&ch.closed) == 0 {
+					if ch.try_pop_from_select(dest) {
+						return .success
+					}
 					return .not_ready
 				} else {
 					return .closed
@@ -517,16 +536,13 @@ fn (mut ch Channel) try_pop_priv(dest voidptr, no_block bool) ChanState {
 					C.memcpy(dest, rd_ptr, ch.objsize)
 				}
 				C.atomic_store_u16(unsafe { &u16(status_adr) }, u16(BufferElemStat.unused))
-				C.atomic_fetch_add_u32(&ch.write_free, 1)
+				C.atomic_fetch_add_u32(voidptr(&ch.write_free), 1)
 				ch.writesem.post()
-				mut null16 := u16(0)
-				for !C.atomic_compare_exchange_weak_u16(&ch.write_sub_mtx, &null16, u16(1)) {
-					null16 = u16(0)
-				}
-				if ch.write_subscriber != voidptr(0) {
+				ch.write_sub_mtx.lock()
+				if ch.write_subscriber != unsafe { nil } {
 					ch.write_subscriber.sem.post()
 				}
-				C.atomic_store_u16(&ch.write_sub_mtx, u16(0))
+				ch.write_sub_mtx.unlock()
 				return .success
 			}
 		}
@@ -536,8 +552,8 @@ fn (mut ch Channel) try_pop_priv(dest voidptr, no_block bool) ChanState {
 			mut rdadr := C.atomic_load_ptr(unsafe { &voidptr(&ch.read_adr) })
 			if rdadr != C.NULL {
 				mut dest2 := dest
-				if C.atomic_compare_exchange_strong_ptr(unsafe { &voidptr(&ch.write_adr) },
-					&dest2, voidptr(0))
+				if C.atomic_compare_exchange_strong_ptr(voidptr(&ch.write_adr), voidptr(&dest2),
+					isize(0))
 				{
 					ch.readsem.post()
 					continue
@@ -547,19 +563,16 @@ fn (mut ch Channel) try_pop_priv(dest voidptr, no_block bool) ChanState {
 			}
 		}
 		if ch.cap == 0 && !write_in_progress {
-			mut null16 := u16(0)
-			for !C.atomic_compare_exchange_weak_u16(&ch.write_sub_mtx, &null16, u16(1)) {
-				null16 = u16(0)
-			}
-			if ch.write_subscriber != voidptr(0) {
+			ch.write_sub_mtx.lock()
+			if ch.write_subscriber != unsafe { nil } {
 				ch.write_subscriber.sem.post()
 			}
-			C.atomic_store_u16(&ch.write_sub_mtx, u16(0))
+			ch.write_sub_mtx.unlock()
 		}
 		mut dest2 := dest
 		for sp := u32(0); sp < spinloops_ || write_in_progress; sp++ {
-			if C.atomic_compare_exchange_strong_ptr(unsafe { &voidptr(&ch.adr_written) },
-				&dest2, voidptr(0))
+			if C.atomic_compare_exchange_strong_ptr(voidptr(&ch.adr_written), voidptr(&dest2),
+				isize(0))
 			{
 				have_swapped = true
 				break
@@ -583,7 +596,7 @@ fn (mut ch Channel) try_pop_priv(dest voidptr, no_block bool) ChanState {
 				ch.readsem_im.wait()
 			}
 			if have_swapped
-				|| C.atomic_compare_exchange_strong_ptr(unsafe { &voidptr(&ch.adr_written) }, &dest2, voidptr(0)) {
+				|| C.atomic_compare_exchange_strong_ptr(voidptr(&ch.adr_written), voidptr(&dest2), isize(0)) {
 				ch.readsem.post()
 				break
 			} else {
@@ -601,83 +614,154 @@ fn (mut ch Channel) try_pop_priv(dest voidptr, no_block bool) ChanState {
 	return .success
 }
 
-// Wait `timeout` on any of `channels[i]` until one of them can push (`is_push[i] = true`) or pop (`is_push[i] = false`)
-// object referenced by `objrefs[i]`. `timeout = time.infinite` means wait unlimited time. `timeout <= 0` means return
-// immediately if no transaction can be performed without waiting.
-// return value: the index of the channel on which a transaction has taken place
-//               -1 if waiting for a transaction has exceeded timeout
-//               -2 if all channels are closed
+// select_recheck_after_waiting coordinates opposing unbuffered selects that
+// both missed each other while their state was still `select_state_scanning`.
+// The select with the lowest state address rescans; later selects wake it and
+// remain in the claimable waiting state.
+fn select_recheck_after_waiting(mut channels []&Channel, dir []Direction, state &u32) bool {
+	mut found_later_waiter := false
+	for i, mut ch in channels {
+		if ch.cap != 0 {
+			continue
+		}
+		sub_mtx := if dir[i] == .push {
+			ch.read_sub_mtx
+		} else {
+			ch.write_sub_mtx
+		}
+		sub_mtx.lock()
+		mut sub := if dir[i] == .push {
+			ch.read_subscriber
+		} else {
+			ch.write_subscriber
+		}
+		for sub != unsafe { nil } {
+			if sub.state != state && C.atomic_load_u32(sub.state) == select_state_waiting {
+				if usize(sub.state) < usize(state) {
+					sub.sem.post()
+					sub_mtx.unlock()
+					return false
+				}
+				found_later_waiter = true
+			}
+			sub = sub.nxt
+		}
+		sub_mtx.unlock()
+	}
+	if found_later_waiter {
+		mut expected := select_state_waiting
+		return C.atomic_compare_exchange_strong_u32(state, &expected, select_state_scanning)
+	}
+	return false
+}
 
-pub fn channel_select(mut channels []&Channel, dir []Direction, mut objrefs []voidptr, timeout time.Duration) int {
-	assert channels.len == dir.len
-	assert dir.len == objrefs.len
+// channel_select waits `timeout` on any of `channels[i]` until one of them can
+// push (`dir[i] == .push`) or pop (`dir[i] == .pop`) the object referenced by
+// `objrefs[i]`. `timeout = i64 max` means wait unlimited time.
+// `timeout <= 0` means return immediately if no transaction can be performed
+// without waiting. It returns the selected channel index, `-1` on timeout, and
+// `-2` when all channels are closed.
+pub fn channel_select(mut channels []&Channel, dir []Direction, mut objrefs []voidptr, timeout i64) int {
+	skip_closed_pop := timeout < 0
+	actual_timeout := if skip_closed_pop { i64(0) } else { timeout }
+	closed_pop_mode := if skip_closed_pop {
+		SelectClosedPopMode.skip
+	} else {
+		SelectClosedPopMode.closed
+	}
+	return channel_select_priv(mut channels, dir, mut objrefs, actual_timeout, closed_pop_mode)
+}
+
+enum SelectClosedPopMode {
+	closed
+	ready
+	skip
+}
+
+// channel_select_lang is used by the language `select` implementation.
+// Closed receive cases stay selectable for blocking/timed selects to match
+// plain `<-ch` semantics, while `select ... else` still skips them.
+fn channel_select_lang(mut channels []&Channel, dir []Direction, mut objrefs []voidptr, timeout i64) int {
+	skip_closed_pop := timeout < 0
+	actual_timeout := if skip_closed_pop { i64(0) } else { timeout }
+	closed_pop_mode := if skip_closed_pop {
+		SelectClosedPopMode.skip
+	} else {
+		SelectClosedPopMode.ready
+	}
+	return channel_select_priv(mut channels, dir, mut objrefs, actual_timeout, closed_pop_mode)
+}
+
+fn channel_select_priv(mut channels []&Channel, dir []Direction, mut objrefs []voidptr, timeout i64, closed_pop_mode SelectClosedPopMode) int {
+	$if debug_channels ? {
+		assert channels.len == dir.len
+		assert dir.len == objrefs.len
+	}
 	mut subscr := []Subscription{len: channels.len}
 	mut sem := unsafe { Semaphore{} }
 	sem.init(0)
+	mut select_state := select_state_scanning
 	for i, ch in channels {
 		subscr[i].sem = unsafe { &sem }
-		if dir[i] == .push {
-			mut null16 := u16(0)
-			for !C.atomic_compare_exchange_weak_u16(&ch.write_sub_mtx, &null16, u16(1)) {
-				null16 = u16(0)
-			}
-			subscr[i].prev = unsafe { &ch.write_subscriber }
-			unsafe {
-				subscr[i].nxt = &Subscription(C.atomic_exchange_ptr(&voidptr(&ch.write_subscriber),
-					&subscr[i]))
-			}
-			if voidptr(subscr[i].nxt) != voidptr(0) {
-				subscr[i].nxt.prev = unsafe { &subscr[i].nxt }
-			}
-			C.atomic_store_u16(&ch.write_sub_mtx, u16(0))
+		subscr[i].state = unsafe { &select_state }
+		subscr[i].objref = objrefs[i]
+		subscr[i].index = u32(i)
+		sub_mtx, subscriber := if dir[i] == .push {
+			ch.write_sub_mtx, &ch.write_subscriber
 		} else {
-			mut null16 := u16(0)
-			for !C.atomic_compare_exchange_weak_u16(&ch.read_sub_mtx, &null16, u16(1)) {
-				null16 = u16(0)
-			}
-			subscr[i].prev = unsafe { &ch.read_subscriber }
-			unsafe {
-				subscr[i].nxt = &Subscription(C.atomic_exchange_ptr(&voidptr(&ch.read_subscriber),
-					&subscr[i]))
-			}
-			if voidptr(subscr[i].nxt) != voidptr(0) {
-				subscr[i].nxt.prev = unsafe { &subscr[i].nxt }
-			}
-			C.atomic_store_u16(&ch.read_sub_mtx, u16(0))
+			ch.read_sub_mtx, &ch.read_subscriber
 		}
+		sub_mtx.lock()
+		unsafe {
+			append_subscription(subscriber, &subscr[i])
+		}
+		sub_mtx.unlock()
 	}
-	stopwatch := if timeout == time.infinite || timeout <= 0 {
-		time.StopWatch{}
-	} else {
-		time.new_stopwatch()
-	}
+	start := if timeout == infinite_timeout || timeout <= 0 { i64(0) } else { sync_mono_now() }
 	mut event_idx := -1 // negative index means `timed out`
+	mut select_start_idx := if channels.len == 0 {
+		0
+	} else {
+		int(sync_mono_now() % channels.len)
+	}
 
 	outer: for {
-		rnd := rand.u32_in_range(0, u32(channels.len))
+		rnd := select_start_idx
+		if channels.len > 0 {
+			select_start_idx = (select_start_idx + 1) % channels.len
+		}
 		mut num_closed := 0
+		mut ready_closed_idx := -1
 		for j, _ in channels {
-			mut i := j + int(rnd)
+			mut i := j + rnd
 			if i >= channels.len {
 				i -= channels.len
 			}
-			if dir[i] == .push {
-				stat := channels[i].try_push_priv(objrefs[i], true)
-				if stat == .success {
-					event_idx = i
-					break outer
-				} else if stat == .closed {
-					num_closed++
-				}
+			stat := if dir[i] == .push {
+				channels[i].try_push_priv(objrefs[i], true)
+			} else if closed_pop_mode == .skip {
+				channels[i].try_pop_select_priv(objrefs[i])
 			} else {
-				stat := channels[i].try_pop_priv(objrefs[i], true)
-				if stat == .success {
-					event_idx = i
-					break outer
-				} else if stat == .closed {
-					num_closed++
-				}
+				channels[i].try_pop_priv(objrefs[i], true)
 			}
+			if stat == .success {
+				event_idx = i
+				break outer
+			} else if stat == .closed && dir[i] == .pop && closed_pop_mode == .ready {
+				unsafe {
+					C.memset(objrefs[i], 0, channels[i].objsize)
+				}
+				if ready_closed_idx == -1 {
+					ready_closed_idx = i
+				}
+				num_closed++
+			} else if stat == .closed {
+				num_closed++
+			}
+		}
+		if ready_closed_idx >= 0 {
+			event_idx = ready_closed_idx
+			break outer
 		}
 		if num_closed == channels.len {
 			event_idx = -2
@@ -686,45 +770,52 @@ pub fn channel_select(mut channels []&Channel, dir []Direction, mut objrefs []vo
 		if timeout <= 0 {
 			break outer
 		}
-		if timeout != time.infinite {
-			remaining := timeout - stopwatch.elapsed()
-			if !sem.timed_wait(remaining) {
+		C.atomic_store_u32(&select_state, select_state_waiting)
+		if select_recheck_after_waiting(mut channels, dir, &select_state) {
+			continue
+		}
+		mut timed_out := false
+		if timeout != infinite_timeout {
+			remaining := timeout - (sync_mono_now() - start)
+			if remaining <= 0 {
+				C.atomic_store_u32(&select_state, select_state_scanning)
 				break outer
+			}
+			if !sem.timed_wait(remaining) {
+				timed_out = true
 			}
 		} else {
 			sem.wait()
 		}
+		mut expected := select_state_waiting
+		if !C.atomic_compare_exchange_strong_u32(&select_state, &expected, select_state_scanning) {
+			for C.atomic_load_u32(&select_state) == select_state_claimed {
+				sem.wait()
+			}
+			event_idx = int(C.atomic_load_u32(&select_state))
+			break outer
+		}
+		if timed_out {
+			break outer
+		}
 	}
 	// reset subscribers
 	for i, ch in channels {
-		if dir[i] == .push {
-			mut null16 := u16(0)
-			for !C.atomic_compare_exchange_weak_u16(&ch.write_sub_mtx, &null16, u16(1)) {
-				null16 = u16(0)
-			}
-			unsafe {
-				*subscr[i].prev = subscr[i].nxt
-			}
-			if subscr[i].nxt != 0 {
-				subscr[i].nxt.prev = subscr[i].prev
-				// just in case we have missed a semaphore during restore
-				subscr[i].nxt.sem.post()
-			}
-			C.atomic_store_u16(&ch.write_sub_mtx, u16(0))
+		sub_mtx := if dir[i] == .push {
+			ch.write_sub_mtx
 		} else {
-			mut null16 := u16(0)
-			for !C.atomic_compare_exchange_weak_u16(&ch.read_sub_mtx, &null16, u16(1)) {
-				null16 = u16(0)
-			}
-			unsafe {
-				*subscr[i].prev = subscr[i].nxt
-			}
-			if subscr[i].nxt != 0 {
-				subscr[i].nxt.prev = subscr[i].prev
-				subscr[i].nxt.sem.post()
-			}
-			C.atomic_store_u16(&ch.read_sub_mtx, u16(0))
+			ch.read_sub_mtx
 		}
+		sub_mtx.lock()
+		unsafe {
+			mut prev := &&Subscription(subscr[i].prev)
+			*prev = subscr[i].nxt
+		}
+		if unsafe { subscr[i].nxt != 0 } {
+			subscr[i].nxt.prev = subscr[i].prev
+			subscr[i].nxt.sem.post()
+		}
+		sub_mtx.unlock()
 	}
 	sem.destroy()
 	return event_idx

@@ -1,3 +1,5 @@
+// vtest retry: 5
+
 // This test case runs concurrent 3 instances of `do_select` that
 // communicate with 6 other threads doing send and receive operations.
 // There are buffered and unbuffered channels - handled by one or two
@@ -41,22 +43,22 @@ fn do_rec_f64(ch chan f64, sumch chan f64) {
 fn test_select() {
 	ch1 := chan int{cap: 3}
 	ch2 := chan int{}
-	// buffer length of chf1 mus be mutiple of 3 (# select threads)
+	// buffer length of chf1 mus be multiple of 3 (# select threads)
 	chf1 := chan f64{cap: 30}
 	chf2 := chan f64{}
 	chsum1 := chan i64{}
 	chsum2 := chan i64{}
 	chsumf1 := chan f64{}
 	chsumf2 := chan f64{}
-	go do_send_int(ch1, 3)
-	go do_select(ch1, ch2, chf1, chf2, chsum1, chsum2)
-	go do_rec_f64(chf1, chsumf1)
-	go do_rec_f64(chf2, chsumf2)
-	go do_rec_f64(chf2, chsumf2)
-	go do_select(ch1, ch2, chf1, chf2, chsum1, chsum2)
-	go do_send_int(ch2, 7)
-	go do_send_int(ch2, 17)
-	go do_select(ch1, ch2, chf1, chf2, chsum1, chsum2)
+	spawn do_send_int(ch1, 3)
+	spawn do_select(ch1, ch2, chf1, chf2, chsum1, chsum2)
+	spawn do_rec_f64(chf1, chsumf1)
+	spawn do_rec_f64(chf2, chsumf2)
+	spawn do_rec_f64(chf2, chsumf2)
+	spawn do_select(ch1, ch2, chf1, chf2, chsum1, chsum2)
+	spawn do_send_int(ch2, 7)
+	spawn do_send_int(ch2, 17)
+	spawn do_select(ch1, ch2, chf1, chf2, chsum1, chsum2)
 
 	sum1 := <-chsum1 + <-chsum1 + <-chsum1
 	sum2 := <-chsum2 + <-chsum2 + <-chsum2

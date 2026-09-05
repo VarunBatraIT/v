@@ -21,6 +21,50 @@ Do not store Contexts inside a struct type; instead, pass a Context explicitly
 to each function that needs it. The Context should be the first parameter,
 typically named ctx, just to make it more consistent.
 
+## Cancellation with Causes
+
+When a context is canceled, you can optionally attach a **cause** — an error
+describing why the cancellation happened. Use `with_cancel_cause` instead of
+`with_cancel` to attach a cause:
+
+```v
+import context
+
+fn main() {
+	mut bg := context.background()
+	mut ctx, cancel := context.with_cancel_cause(mut bg)
+	defer { cancel(none) }
+
+	// Cancel with a specific error cause
+	cancel(error('request timed out'))
+}
+```
+
+Retrieve the cause from any context using `cause(ctx)`:
+
+```v
+import context
+
+fn main() {
+	mut bg := context.background()
+	mut ctx, cancel := context.with_cancel_cause(mut bg)
+	cancel(none)
+	c := context.cause(ctx)
+	if c !is none {
+		println('canceled: ${c}')
+	}
+}
+```
+
+The cause is propagated through the context tree. If a parent context is
+canceled with a cause, all derived contexts inherit the same cause.
+If multiple ancestors are canceled, the first cause encountered is returned.
+
+### Convenience variants
+
+- `with_timeout_cause(ctx, dur, err)` — timeout with a custom cause
+- `with_deadline_cause(ctx, deadline, err)` — deadline with a custom cause
+
 ## Examples
 
 In this section you can see some usage examples for this module
@@ -28,12 +72,13 @@ In this section you can see some usage examples for this module
 ### Context With Cancellation
 
 ```v
+import time
 import context
 
 // This example demonstrates the use of a cancelable context to prevent a
 // routine leak. By the end of the example function, the routine started
 // by gen will return without leaking.
-fn example_with_cancel() {
+fn main() {
 	// gen generates integers in a separate routine and
 	// sends them to the returned channel.
 	// The callers of gen need to cancel the context once
@@ -41,13 +86,14 @@ fn example_with_cancel() {
 	// the internal routine started by gen.
 	gen := fn (mut ctx context.Context) chan int {
 		dst := chan int{}
-		go fn (mut ctx context.Context, dst chan int) {
+		spawn fn (mut ctx context.Context, dst chan int) {
 			mut v := 0
 			ch := ctx.done()
 			for {
 				select {
 					_ := <-ch {
 						// returning not to leak the routine
+						eprintln('> go thread returns because ctx was canceled/done')
 						return
 					}
 					dst <- v {
@@ -60,9 +106,10 @@ fn example_with_cancel() {
 	}
 
 	mut background := context.background()
-	mut ctx, cancel := context.with_cancel(mut &background)
+	mut ctx, cancel := context.with_cancel(mut background)
 	defer {
 		cancel()
+		time.sleep(2 * time.millisecond) // give a small time window, in which the go thread routine has a chance to return
 	}
 
 	mut mut_ctx := ctx
@@ -70,75 +117,80 @@ fn example_with_cancel() {
 	ch := gen(mut ctx2)
 	for i in 0 .. 5 {
 		v := <-ch
+		println('> received value: ${v}')
 		assert i == v
 	}
+	println('> main is finished here')
 }
 ```
 
 ### Context With Deadline
 
 ```v
-import context
 import time
+import context
 
-const (
-	// a reasonable duration to block in an example
-	short_duration = 1 * time.millisecond
-)
+const short_duration = 2 * time.millisecond // a reasonable duration to block in an example
 
 // This example passes a context with an arbitrary deadline to tell a blocking
 // function that it should abandon its work as soon as it gets to it.
-fn example_with_deadline() {
+fn main() {
 	dur := time.now().add(short_duration)
 	mut background := context.background()
-	mut ctx, cancel := context.with_deadline(mut &background, dur)
+	mut ctx, cancel := context.with_deadline(mut background, dur)
 
 	defer {
 		// Even though ctx will be expired, it is good practice to call its
 		// cancellation function in any case. Failure to do so may keep the
 		// context and its parent alive longer than necessary.
 		cancel()
+		time.sleep(short_duration) // give a small time window, in which the go thread routine has a chance to return
+		eprintln('> defer block finishes')
 	}
 
 	ctx_ch := ctx.done()
 	select {
-		_ := <-ctx_ch {}
+		_ := <-ctx_ch {
+			println('>> read from ctx_ch succeeded')
+		}
 		1 * time.second {
 			panic('This should not happen')
 		}
 	}
+	eprintln('> main finishes')
 }
 ```
 
 ### Context With Timeout
 
 ```v
-import context
 import time
+import context
 
-const (
-	// a reasonable duration to block in an example
-	short_duration = 1 * time.millisecond
-)
+const short_duration = 2 * time.millisecond // a reasonable duration to block in an example
 
 // This example passes a context with a timeout to tell a blocking function that
 // it should abandon its work after the timeout elapses.
-fn example_with_timeout() {
+fn main() {
 	// Pass a context with a timeout to tell a blocking function that it
 	// should abandon its work after the timeout elapses.
 	mut background := context.background()
-	mut ctx, cancel := context.with_timeout(mut &background, short_duration)
+	mut ctx, cancel := context.with_timeout(mut background, short_duration)
 	defer {
 		cancel()
+		eprintln('> defer finishes')
 	}
 
 	ctx_ch := ctx.done()
 	select {
-		_ := <-ctx_ch {}
+		_ := <-ctx_ch {
+			eprintln('> reading from ctx_ch succeeded')
+		}
 		1 * time.second {
 			panic('This should not happen')
 		}
 	}
+	eprintln('> main finishes')
 }
 ```
 
@@ -157,7 +209,7 @@ struct Value {
 
 // This example demonstrates how a value can be passed to the context
 // and also how to retrieve it if it exists.
-fn example_with_value() {
+fn main() {
 	f := fn (ctx context.Context, key context.Key) &Value {
 		if value := ctx.value(key) {
 			match value {
@@ -176,7 +228,42 @@ fn example_with_value() {
 	}
 	ctx := context.with_value(context.background(), key, value)
 
-	assert value == f(ctx, key)
-	assert not_found_value == f(ctx, 'color')
+	assert value == dump(f(ctx, key))
+	assert not_found_value == dump(f(ctx, 'color'))
+}
+```
+
+### Context With Cancellation Cause
+
+```v
+import context
+
+struct AppError {
+	msg string
+}
+
+fn (e AppError) msg() string {
+	return e.msg
+}
+
+fn (e AppError) code() int {
+	return 0
+}
+
+fn main() {
+	mut bg := context.background()
+	mut ctx, cancel := context.with_cancel_cause(mut bg)
+	defer { cancel(none) }
+
+	// Simulate an error condition and cancel with a cause
+	cancel(AppError{
+		msg: 'operation failed'
+	})
+
+	// Retrieve the cause
+	c := context.cause(ctx)
+	if c !is none {
+		eprintln('context canceled: ${c}')
+	}
 }
 ```

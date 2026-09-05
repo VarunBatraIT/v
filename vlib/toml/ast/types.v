@@ -10,8 +10,10 @@ import strconv
 // can be found in a TOML document.
 pub type Key = Bare | Bool | Null | Number | Quoted
 
+// str returns the string representation of the key. This is implemented
+// by all the variants of Key.
 pub fn (k Key) str() string {
-	return k.text
+	return k.text.clone()
 }
 
 // Value is a sumtype representing all possible value types
@@ -31,7 +33,7 @@ pub type Value = Bool
 pub fn (v Value) str() string {
 	match v {
 		Quoted, Date, DateTime, Time {
-			return '"$v.text"'
+			return '"${v.text}"'
 		}
 		Bool, Null, Number {
 			return v.text
@@ -39,7 +41,7 @@ pub fn (v Value) str() string {
 		map[string]Value {
 			mut str := '{'
 			for key, val in v {
-				str += ' "$key": $val,'
+				str += ' "${key}": ${val},'
 			}
 			str = str.trim_right(',')
 			str += ' }'
@@ -48,7 +50,7 @@ pub fn (v Value) str() string {
 		[]Value {
 			mut str := '['
 			for val in v {
-				str += ' $val,'
+				str += ' ${val},'
 			}
 			str = str.trim_right(',')
 			str += ' ]'
@@ -70,14 +72,14 @@ pub fn (dtt DateTimeType) str() string {
 pub struct Comment {
 pub:
 	text string
-	pos  token.Position
+	pos  token.Pos
 }
 
 // str returns the `string` representation of the `Comment` type.
 pub fn (c Comment) str() string {
 	mut s := typeof(c).name + '{\n'
-	s += '  text:  \'$c.text\'\n'
-	s += '  pos:  $c.pos\n'
+	s += '  text:  \'${c.text}\'\n'
+	s += '  pos:  ${c.pos}\n'
 	s += '}'
 	return s
 }
@@ -86,7 +88,7 @@ pub fn (c Comment) str() string {
 pub struct Null {
 pub:
 	text string
-	pos  token.Position
+	pos  token.Pos
 }
 
 // str returns the `string` representation of the `Null` type
@@ -97,20 +99,21 @@ pub fn (n Null) str() string {
 // Quoted is the data representation of a TOML quoted type (`"quoted-key" = "I'm a quoted value"`).
 // Quoted types can appear both as keys and values in TOML documents.
 pub struct Quoted {
+pub mut:
+	text string
 pub:
-	text         string
-	pos          token.Position
+	pos          token.Pos
 	is_multiline bool
-	quote        byte
+	quote        u8
 }
 
 // str returns the `string` representation of the `Quoted` type.
 pub fn (q Quoted) str() string {
 	mut str := typeof(q).name + '{\n'
-	str += '  text:  \'$q.text\'\n'
-	str += '  pos:  $q.pos\n'
-	str += '  is_multiline:  $q.is_multiline\n'
-	str += '  quote: \'$q.quote\'\n'
+	str += '  text:  \'${q.text}\'\n'
+	str += '  pos:  ${q.pos}\n'
+	str += '  is_multiline:  ${q.is_multiline}\n'
+	str += '  quote: \'${q.quote}\'\n'
 	str += '}'
 	return str
 }
@@ -121,14 +124,14 @@ pub fn (q Quoted) str() string {
 pub struct Bare {
 pub:
 	text string
-	pos  token.Position
+	pos  token.Pos
 }
 
 // str returns the `string` representation of the `Bare` type.
 pub fn (b Bare) str() string {
 	mut str := typeof(b).name + '{\n'
-	str += '  text:  \'$b.text\'\n'
-	str += '  pos:  $b.pos\n'
+	str += '  text:  \'${b.text}\'\n'
+	str += '  pos:  ${b.pos}\n'
 	str += '}'
 	return str
 }
@@ -139,14 +142,14 @@ pub fn (b Bare) str() string {
 pub struct Bool {
 pub:
 	text string
-	pos  token.Position
+	pos  token.Pos
 }
 
 // str returns the `string` representation of the `Bool` type.
 pub fn (b Bool) str() string {
 	mut str := typeof(b).name + '{\n'
-	str += '  text:  \'$b.text\'\n'
-	str += '  pos:  $b.pos\n'
+	str += '  text:  \'${b.text}\'\n'
+	str += '  pos:  ${b.pos}\n'
 	str += '}'
 	return str
 }
@@ -156,15 +159,16 @@ pub fn (b Bool) str() string {
 // Number can be integers, floats, infinite, NaN - they can have exponents (`5e2`) and be sign prefixed (`+2`).
 pub struct Number {
 pub:
+	pos token.Pos
+pub mut:
 	text string
-	pos  token.Position
 }
 
 // str returns the `string` representation of the `Number` type.
 pub fn (n Number) str() string {
 	mut str := typeof(n).name + '{\n'
-	str += '  text:  \'$n.text\'\n'
-	str += '  pos:  $n.pos\n'
+	str += '  text:  \'${n.text}\'\n'
+	str += '  pos:  ${n.pos}\n'
 	str += '}'
 	return str
 }
@@ -181,7 +185,7 @@ pub fn (n Number) i64() i64 {
 		bin := n.text.all_after('0b').replace('_', '')
 		return strconv.parse_int(bin, 2, 64) or { i64(0) }
 	}
-	return strconv.parse_int(n.text, 0, 0) or { i64(0) }
+	return strconv.parse_int(n.text, 0, 64) or { i64(0) }
 }
 
 // f64 returns the `n Number` as an `f64` value.
@@ -195,14 +199,14 @@ pub fn (n Number) f64() f64 {
 pub struct Date {
 pub:
 	text string
-	pos  token.Position
+	pos  token.Pos
 }
 
 // str returns the `string` representation of the `Date` type.
 pub fn (d Date) str() string {
 	mut str := typeof(d).name + '{\n'
-	str += '  text:  \'$d.text\'\n'
-	str += '  pos:  $d.pos\n'
+	str += '  text:  \'${d.text}\'\n'
+	str += '  pos:  ${d.pos}\n'
 	str += '}'
 	return str
 }
@@ -213,15 +217,15 @@ pub struct Time {
 pub:
 	text   string
 	offset int
-	pos    token.Position
+	pos    token.Pos
 }
 
 // str returns the `string` representation of the `Time` type.
 pub fn (t Time) str() string {
 	mut str := typeof(t).name + '{\n'
-	str += '  text:  \'$t.text\'\n'
-	str += '  offset:  \'$t.offset\'\n'
-	str += '  pos:  $t.pos\n'
+	str += '  text:  \'${t.text}\'\n'
+	str += '  offset:  \'${t.offset}\'\n'
+	str += '  pos:  ${t.pos}\n'
 	str += '}'
 	return str
 }
@@ -229,9 +233,10 @@ pub fn (t Time) str() string {
 // DateTime is the data representation of a TOML date-time type (`YYYY-MM-DDTHH:MM:SS.milli`).
 // DateTime types can appear only as values in TOML documents.
 pub struct DateTime {
-pub:
+pub mut:
 	text string
-	pos  token.Position
+pub:
+	pos  token.Pos
 	date Date
 	time Time
 }
@@ -239,10 +244,10 @@ pub:
 // str returns the `string` representation of the `DateTime` type.
 pub fn (dt DateTime) str() string {
 	mut str := typeof(dt).name + '{\n'
-	str += '  text:  \'$dt.text\'\n'
-	str += '  date:  \'$dt.date\'\n'
-	str += '  time:  \'$dt.time\'\n'
-	str += '  pos:  $dt.pos\n'
+	str += '  text:  \'${dt.text}\'\n'
+	str += '  date:  \'${dt.date}\'\n'
+	str += '  time:  \'${dt.time}\'\n'
+	str += '  pos:  ${dt.pos}\n'
 	str += '}'
 	return str
 }
@@ -250,13 +255,13 @@ pub fn (dt DateTime) str() string {
 // EOF is the data representation of the end of the TOML document.
 pub struct EOF {
 pub:
-	pos token.Position
+	pos token.Pos
 }
 
 // str returns the `string` representation of the `EOF` type.
 pub fn (e EOF) str() string {
 	mut str := typeof(e).name + '{\n'
-	str += '  pos:  $e.pos\n'
+	str += '  pos:  ${e.pos}\n'
 	str += '}'
 	return str
 }

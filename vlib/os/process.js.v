@@ -1,9 +1,12 @@
 module os
 
-#const $child_process = require('child_process')
+$if js_node {
+	#const $child_process = require('child_process')
+	#const $fs = require('fs')
+}
 
-// new_process - create a new process descriptor
-// NB: new does NOT start the new process.
+// new_process - create a new process descriptor.
+// Note: new does NOT start the new process.
 // That is done because you may want to customize it first,
 // by calling different set_ methods on it.
 // In order to start it, call p.run() or p.wait()
@@ -15,19 +18,27 @@ pub fn new_process(filename string) &Process {
 }
 
 fn (mut p Process) spawn_internal() {
+	#let v_stdin_fd = null;
+	#try {
+	#if (p.val.has_stdin_path) v_stdin_fd = $fs.openSync(p.val.stdin_path+'', 'r');
 	#p.val.pid = $child_process.spawn(
 	#p.val.filename+'',
 	#p.val.args.arr.map((x) => x.valueOf() + ''),
 	#{
 	#env: (p.val.env_is_custom ? p.val.env : $process.env),
+	#stdio: [v_stdin_fd === null ? 'pipe' : v_stdin_fd, 'pipe', 'pipe'],
 	#})
+	#} finally {
+	#if (v_stdin_fd !== null) $fs.closeSync(v_stdin_fd);
+	#}
 	#p.val.pid.on('error', function (err) { builtin.panic('Failed to start subprocess') })
 
 	p.status = .running
-	// todo(playX): stderr,stdin
 	if p.use_stdio_ctl {
 		#p.val.pid.stdout.pipe(process.stdout)
-		#p.val.pid.stdin.pipe(process.stdin)
+		if !p.has_stdin_path {
+			#p.val.pid.stdin.pipe(process.stdin)
+		}
 		#p.val.pid.stderr.pipe(process.stderr)
 	}
 }
@@ -94,6 +105,10 @@ pub fn (mut p Process) stdin_write(s string) {
 	#p.val.pid.stdin.write(s)
 }
 
+pub fn (mut p Process) stdin_resume() {
+	#p.val.pid.stdin.resume()
+}
+
 // todo(playX): probably does not work
 
 // will read from stdout pipe, will only return when EOF (end of file) or data
@@ -109,9 +124,13 @@ pub fn (mut p Process) stdout_slurp() string {
 // _check_redirection_call - should be called just by stdxxx methods
 fn (mut p Process) check_redirection_call(fn_name string) {
 	if !p.use_stdio_ctl {
-		panic('Call p.set_redirect_stdio() before calling p.$fn_name')
+		panic('Call p.set_redirect_stdio() before calling p.${fn_name}')
 	}
 	if p.status == .not_started {
 		panic('Call p.${fn_name}() after you have called p.run()')
 	}
+}
+
+pub fn (mut p Process) close() {
+	// no-op on JS backend
 }

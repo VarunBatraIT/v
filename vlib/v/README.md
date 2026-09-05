@@ -1,3 +1,12 @@
+## Description
+
+`v` is a namespace for all of the V compiler modules.
+
+The V compiler modules can be used by V programs that want to
+process V source code in different ways, in fact, that is how
+various V tools are implemented: `v fmt`, `v doc`, `v ast`, `vls`,
+as well as the V compiler itself.
+
 # Compiler pipeline
 A simple high level explanation
 how the compiler pipeline (`parser` -> `checker` -> `generator`) works.
@@ -23,29 +32,24 @@ Skips the following file types:
 or `Preferences.compile_defines_all` **if any file is defined**.
 
 ## Parsing files
-To parse something a new template is created as the first step:
+To parse something, a new table is created as the first step:
 ```v
 import v.ast
 
-table := ast.new_table()
+mut table := ast.new_table()
 ```
 
 a new preference is created:
 ```v
 import v.pref
 
-pref := &pref.Preferences{}
+pref_ := &pref.Preferences{}
 ```
 
-and a new scope is created:
-```v
-import v.ast
-
-scope := ast.Scope{
-	parent: 0
-}
-```
-after that, you can parse your files.
+After that, you can parse your files.
+The parser creates the file scope internally and attaches it to the
+returned `ast.File` in `parsed_file.scope`.
+`ast.Table` also keeps a global scope in `table.global_scope`.
 
 ## Parse text
 If you want to parse only text which isn't saved on the disk you can use this function.
@@ -53,8 +57,9 @@ If you want to parse only text which isn't saved on the disk you can use this fu
 import v.parser
 
 code := ''
-// table, pref and scope needs to be passed as reference
-parsed_file := parser.parse_text(code, table, .parse_comments, &pref, &scope)
+path := 'example.v'
+// table and pref need to be passed as reference
+mut parsed_file := parser.parse_text(code, path, mut table, .parse_comments, pref_)
 ```
 
 ## Parse a single file
@@ -64,8 +69,8 @@ The paths are collected one step earlier.
 import v.parser
 
 path := ''
-// table, pref and scope needs to be passed as reference
-parsed_file := parser.parse_file(path, table, .parse_comments, &pref, &scope)
+// table and pref need to be passed as reference
+mut parsed_file := parser.parse_file(path, mut table, .parse_comments, pref_)
 ```
 
 ## Parse a set of files
@@ -75,8 +80,8 @@ there is also a function which does all the work.
 import v.parser
 
 paths := ['']
-// table, pref and scope needs to be passed as reference
-parsed_files := parser.parse_files(paths, table, &pref, &scope)
+// table and pref need to be passed as reference
+parsed_files := parser.parse_files(paths, mut table, pref_)
 ```
 
 ## Parse imports
@@ -87,7 +92,7 @@ If the module which is imported isn't parsed already,
 you have to collect it relatively from the main file.
 For this the `ast.File` contains a list of imports.
 Those imports needs to be found on disk.
-`.` is just replaced with seperators in the relative location of the main file.
+`.` is just replaced with separators in the relative location of the main file.
 Then all files from that directory are collected and parsed again like the previous steps explained.
 
 ## Checking AST
@@ -95,14 +100,14 @@ A new checker is created:
 ```v oksyntax
 import v.checker
 
-mut checker := checker.new_checker(table, &pref)
+mut checker := checker.new_checker(table, pref_)
 ```
 
 After checking your files in `checker.errors` and `checker.warnings` you can see the results.
 
 ### Check `ast.File`
 ```v oksyntax
-checker.check(parsed_file)
+checker.check(mut parsed_file)
 ```
 
 ### Check a list of `ast.File`
@@ -115,5 +120,5 @@ Generating C code works just as this:
 ```v oksyntax
 import v.gen.c
 
-res := c.gen(parsed_files, table, &pref)
+res := c.gen(parsed_files, mut table, pref_)
 ```

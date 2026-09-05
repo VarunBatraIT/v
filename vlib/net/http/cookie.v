@@ -32,34 +32,20 @@ pub mut:
 //
 // See https://tools.ietf.org/html/draft-ietf-httpbis-cookie-same-site-00 for details.
 pub enum SameSite {
+	same_site_not_set
 	same_site_default_mode = 1
 	same_site_lax_mode
 	same_site_strict_mode
 	same_site_none_mode
 }
 
-// Parses all "Set-Cookie" values from the header `h` and
-// returns the successfully parsed Cookies.
-pub fn read_set_cookies(h map[string][]string) []&Cookie {
-	cookies_s := h['Set-Cookie']
-	cookie_count := cookies_s.len
-	if cookie_count == 0 {
-		return []
-	}
-	mut cookies := []&Cookie{}
-	for _, line in cookies_s {
-		c := parse_cookie(line) or { continue }
-		cookies << &c
-	}
-	return cookies
-}
-
 // Parses all "Cookie" values from the header `h` and
 // returns the successfully parsed Cookies.
 //
 // if `filter` isn't empty, only cookies of that name are returned
-pub fn read_cookies(h map[string][]string, filter string) []&Cookie {
-	lines := h['Cookie']
+pub fn read_cookies(h Header, filter string) []&Cookie {
+	// lines := h['Cookie']
+	lines := h.values(.cookie) // or {
 	if lines.len == 0 {
 		return []
 	}
@@ -68,10 +54,13 @@ pub fn read_cookies(h map[string][]string, filter string) []&Cookie {
 		mut line := line_.trim_space()
 		mut part := ''
 		for line.len > 0 {
-			if line.index_any(';') > 0 {
-				line_parts := line.split(';')
+			mut semicolon_position :=
+				line.index_any(';') // Store the position of the next semicolon
+			if semicolon_position > 0 { // So, there is a semicolon, let's parse until that position
+				line_parts :=
+					line[..semicolon_position].split(';') // split the line only until that semicolon
+				line = line[(semicolon_position + 1)..] // and then skip everything before the semicolon
 				part = line_parts[0]
-				line = line_parts[1]
 			} else {
 				part = line
 				line = ''
@@ -80,13 +69,7 @@ pub fn read_cookies(h map[string][]string, filter string) []&Cookie {
 			if part.len == 0 {
 				continue
 			}
-			mut name := part
-			mut val := ''
-			if part.contains('=') {
-				val_parts := part.split('=')
-				name = val_parts[0]
-				val = val_parts[1]
-			}
+			mut name, mut val := part.split_once('=') or { part, '' }
 			if !is_cookie_name_valid(name) {
 				continue
 			}
@@ -95,7 +78,7 @@ pub fn read_cookies(h map[string][]string, filter string) []&Cookie {
 			}
 			val = parse_cookie_value(val, true) or { continue }
 			cookies << &Cookie{
-				name: name
+				name:  name
 				value: val
 			}
 		}
@@ -103,7 +86,7 @@ pub fn read_cookies(h map[string][]string, filter string) []&Cookie {
 	return cookies
 }
 
-// Returns the serialization of the cookie for use in a Cookie header
+// str returns the serialization of the cookie for use in a Cookie header
 // (if only Name and Value are set) or a Set-Cookie response
 // header (if other fields are set).
 //
@@ -141,12 +124,11 @@ pub fn (c &Cookie) str() string {
 		}
 	}
 	if c.expires.year > 1600 {
-		e := c.expires
-		time_str := '$e.weekday_str(), $e.day.str() $e.smonth() $e.year $e.hhmmss() GMT'
+		time_str := c.expires.http_header_string()
 		b.write_string('; expires=')
 		b.write_string(time_str)
 	}
-	// TODO: Fix this. Techically a max age of 0 or less should be 0
+	// TODO: Fix this. Technically a max age of 0 or less should be 0
 	// We need a way to not have a max age.
 	if c.max_age > 0 {
 		b.write_string('; Max-Age=')
@@ -161,6 +143,7 @@ pub fn (c &Cookie) str() string {
 		b.write_string('; Secure')
 	}
 	match c.same_site {
+		.same_site_not_set {}
 		.same_site_default_mode {
 			b.write_string('; SameSite')
 		}
@@ -174,10 +157,11 @@ pub fn (c &Cookie) str() string {
 			b.write_string('; SameSite=Strict')
 		}
 	}
+
 	return b.str()
 }
 
-fn sanitize(valid fn (byte) bool, v string) string {
+fn sanitize(valid fn (u8) bool, v string) string {
 	mut ok := true
 	for i in 0 .. v.len {
 		if valid(v[i]) {
@@ -211,9 +195,10 @@ pub fn sanitize_cookie_value(v string) string {
 	if v.len == 0 {
 		return v
 	}
-	// Check for the existence of a space or comma
-	if val.starts_with(' ') || val.ends_with(' ') || val.starts_with(',') || val.ends_with(',') {
-		return '"$v"'
+	// Check for the existence of a space, comma or semicolon
+	if val.starts_with(' ') || v.contains(';') || val.ends_with(' ') || val.starts_with(',')
+		|| val.ends_with(',') {
+		return '"${v}"'
 	}
 	return v
 }
@@ -222,11 +207,11 @@ fn sanitize_cookie_path(v string) string {
 	return sanitize(valid_cookie_path_byte, v)
 }
 
-fn valid_cookie_value_byte(b byte) bool {
+fn valid_cookie_value_byte(b u8) bool {
 	return 0x20 <= b && b < 0x7f && b != `"` && b != `;` && b != `\\`
 }
 
-fn valid_cookie_path_byte(b byte) bool {
+fn valid_cookie_path_byte(b u8) bool {
 	return 0x20 <= b && b < 0x7f && b != `!`
 }
 
@@ -260,7 +245,7 @@ pub fn is_cookie_domain_name(_s string) bool {
 	mut part_len := 0
 	for i, _ in s {
 		c := s[i]
-		if (`a` <= c && c <= `z`) || (`A` <= c && c <= `Z`) {
+		if c.is_letter() {
 			// No '_' allowed here (in contrast to package net).
 			ok = true
 			part_len++
@@ -293,7 +278,7 @@ pub fn is_cookie_domain_name(_s string) bool {
 	return ok
 }
 
-fn parse_cookie_value(_raw string, allow_double_quote bool) ?string {
+fn parse_cookie_value(_raw string, allow_double_quote bool) !string {
 	mut raw := _raw
 	// Strip the quotes, if present
 	if allow_double_quote && raw.len > 1 && raw[0] == `"` && raw[raw.len - 1] == `"` {
@@ -319,26 +304,23 @@ fn is_cookie_name_valid(name string) bool {
 	return true
 }
 
-fn parse_cookie(line string) ?Cookie {
+fn parse_cookie(line string) !Cookie {
 	mut parts := line.trim_space().split(';')
 	if parts.len == 1 && parts[0] == '' {
 		return error('malformed cookie')
 	}
 	parts[0] = parts[0].trim_space()
-	keyval := parts[0].split('=')
-	if keyval.len != 2 {
-		return error('malformed cookie')
-	}
-	name := keyval[0]
-	raw_value := keyval[1]
+	index := parts[0].index('=') or { return error('malformed cookie') }
+	name := parts[0][..index]
+	raw_value := parts[0][index + 1..]
 	if !is_cookie_name_valid(name) {
 		return error('malformed cookie')
 	}
 	value := parse_cookie_value(raw_value, true) or { return error('malformed cookie') }
 	mut c := Cookie{
-		name: name
+		name:  name
 		value: value
-		raw: line
+		raw:   line
 	}
 	for i, _ in parts {
 		parts[i] = parts[i].trim_space()
@@ -347,10 +329,9 @@ fn parse_cookie(line string) ?Cookie {
 		}
 		mut attr := parts[i]
 		mut raw_val := ''
-		if attr.contains('=') {
-			pieces := attr.split('=')
-			attr = pieces[0]
-			raw_val = pieces[1]
+		if ind := parts[i].index('=') {
+			attr = parts[i][..ind]
+			raw_val = parts[i][ind + 1..]
 		}
 		lower_attr := attr.to_lower()
 		val := parse_cookie_value(raw_val, false) or {

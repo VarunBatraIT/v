@@ -4,7 +4,7 @@ import v.ast
 import strings
 import v.util
 
-[inline]
+@[inline]
 fn styp_to_copy_fn_name(styp string) string {
 	return styp.replace_each(['*', '', '.', '__', ' ', '__']) + '_\$copy'
 }
@@ -18,30 +18,30 @@ fn (mut g JsGen) get_copy_fn(typ ast.Type) string {
 			unwrapped = ast.u64_type
 		}
 	}
-	if typ.has_flag(.optional) {
-		unwrapped.set_flag(.optional)
+	if typ.has_flag(.option) {
+		unwrapped.set_flag(.option)
 	}
-	styp := g.typ(unwrapped)
-	mut sym := g.table.get_type_symbol(unwrapped)
+	styp := g.styp(unwrapped)
+	mut sym := g.table.sym(unwrapped)
 	mut copy_fn_name := styp_to_copy_fn_name(styp)
 	if mut sym.info is ast.Alias {
 		if sym.info.is_import {
-			sym = g.table.get_type_symbol(sym.info.parent_type)
+			sym = g.table.sym(sym.info.parent_type)
 			copy_fn_name = styp_to_copy_fn_name(sym.name)
 		}
 	}
 	g.copy_types << StrType{
-		typ: unwrapped
+		typ:  unwrapped
 		styp: styp
 	}
 	return copy_fn_name
 }
 
-fn (mut g JsGen) gen_copy_for_option(typ ast.Type, styp string, copy_fn_name string) {
+fn (mut g JsGen) gen_copy_for_option(_typ ast.Type, _styp string, copy_fn_name string) {
 	g.definitions.writeln('function ${copy_fn_name}(it) { return it; }')
 }
 
-fn (mut g JsGen) gen_copy_for_alias(info ast.Alias, styp string, copy_fn_name string) {
+fn (mut g JsGen) gen_copy_for_alias(info ast.Alias, _styp string, copy_fn_name string) {
 	parent_copy_fn_name := g.get_str_fn(info.parent_type)
 
 	g.definitions.writeln('function ${copy_fn_name}(it) {')
@@ -50,26 +50,26 @@ fn (mut g JsGen) gen_copy_for_alias(info ast.Alias, styp string, copy_fn_name st
 	g.definitions.writeln('}')
 }
 
-fn (mut g JsGen) gen_copy_for_multi_return(info ast.MultiReturn, styp string, copy_fn_name string) {
+fn (mut g JsGen) gen_copy_for_multi_return(info ast.MultiReturn, _styp string, copy_fn_name string) {
 	mut fn_builder := strings.new_builder(512)
 	fn_builder.writeln('function ${copy_fn_name}(a) {')
 	fn_builder.writeln('\tlet arr = []')
 	for i, typ in info.types {
-		sym := g.table.get_type_symbol(typ)
+		sym := g.table.sym(typ)
 		arg_copy_fn_name := g.get_copy_fn(typ)
 
 		if sym.kind in [.f32, .f64] {
 			if sym.kind == .f32 {
-				fn_builder.writeln('\tarr.push(new f32(a[$i].val));')
+				fn_builder.writeln('\tarr.push(new f32(a[${i}].val));')
 			} else {
-				fn_builder.writeln('\tarr.push(new f64(a[$i].val));')
+				fn_builder.writeln('\tarr.push(new f64(a[${i}].val));')
 			}
 		} else if sym.kind == .string {
-			fn_builder.writeln('\tarr.push(new string(a[$i].str +""));')
+			fn_builder.writeln('\tarr.push(new string(a[${i}].str +""));')
 		} else if sym.kind == .function {
-			fn_builder.writeln('\tarr.push(a[$i]);')
+			fn_builder.writeln('\tarr.push(a[${i}]);')
 		} else {
-			fn_builder.writeln('\tarr.push(${arg_copy_fn_name}(a[$i]));')
+			fn_builder.writeln('\tarr.push(${arg_copy_fn_name}(a[${i}]));')
 		}
 	}
 	fn_builder.writeln('\treturn arr;')
@@ -77,23 +77,23 @@ fn (mut g JsGen) gen_copy_for_multi_return(info ast.MultiReturn, styp string, co
 	g.definitions.writeln(fn_builder.str())
 }
 
-fn (mut g JsGen) gen_copy_for_enum(info ast.Enum, styp string, copy_fn_name string) {
+fn (mut g JsGen) gen_copy_for_enum(_info ast.Enum, _styp string, copy_fn_name string) {
 	g.definitions.writeln('function ${copy_fn_name}(it) { return it; }')
 }
 
-fn (mut g JsGen) gen_copy_for_union_sum_type(info ast.SumType, styp string, copy_fn_name string) {
+fn (mut g JsGen) gen_copy_for_union_sum_type(info ast.SumType, _styp string, copy_fn_name string) {
 	mut fn_builder := strings.new_builder(512)
 	fn_builder.writeln('function ${copy_fn_name}(x) {')
 	for typ in info.variants {
-		typ_str := g.typ(typ)
+		typ_str := g.styp(typ)
 		mut func_name := g.get_copy_fn(typ)
-		fn_builder.writeln('if (x instanceof $typ_str) { return ${func_name}(x); }')
+		fn_builder.writeln('if (x instanceof ${typ_str}) { return ${func_name}(x); }')
 	}
 	fn_builder.writeln('builtin__panic(new string("unknown sum type value"));\n}')
 	g.definitions.writeln(fn_builder.str())
 }
 
-fn (mut g JsGen) gen_copy_for_interface(info ast.Interface, styp string, copy_fn_name string) {
+fn (mut g JsGen) gen_copy_for_interface(_info ast.Interface, styp string, copy_fn_name string) {
 	mut fn_builder := strings.new_builder(512)
 	mut clean_interface_v_type_name := styp.replace('__', '.')
 	if styp.ends_with('*') {
@@ -108,7 +108,7 @@ fn (mut g JsGen) gen_copy_for_interface(info ast.Interface, styp string, copy_fn
 	fn_builder.writeln('function ${copy_fn_name}(x) { return x; }')
 	/*
 	for typ in info.types {
-		subtype := g.table.get_type_symbol(typ)
+		subtype := g.table.sym(typ)
 		mut func_name := g.get_copy_fn(typ)
 		if typ == ast.string_type {
 
@@ -116,7 +116,7 @@ fn (mut g JsGen) gen_copy_for_interface(info ast.Interface, styp string, copy_fn
 			fn_builder.write_string(' return new string(x.str + "");')
 		} else {
 			/*
-			mut val := '${func_name}(${deref}($subtype.cname*)x._$subtype.cname'
+			mut val := '${func_name}(${deref}(${subtype.cname}*)x._${subtype.cname}'
 			if should_use_indent_func(subtype.kind) && !sym_has_str_method {
 				val += ', indent_count'
 			}
@@ -124,7 +124,7 @@ fn (mut g JsGen) gen_copy_for_interface(info ast.Interface, styp string, copy_fn
 			val = val
 			*/
 			res := '"TODO'
-			fn_builder.write_string('\tif (x instanceof ${g.typ(typ)})')
+			fn_builder.write_string('\tif (x instanceof ${g.styp(typ)})')
 			fn_builder.write_string(' return ${func_name}(x);\n')
 		}
 	}
@@ -133,23 +133,23 @@ fn (mut g JsGen) gen_copy_for_interface(info ast.Interface, styp string, copy_fn
 	g.definitions.writeln(fn_builder.str())
 }
 
-fn (mut g JsGen) gen_copy_for_fn_type(info ast.FnType, styp string, copy_fn_name string) {
-	g.definitions.writeln('function $copy_fn_name (x) { return x; }')
+fn (mut g JsGen) gen_copy_for_fn_type(_info ast.FnType, _styp string, copy_fn_name string) {
+	g.definitions.writeln('function ${copy_fn_name} (x) { return x; }')
 }
 
-fn (mut g JsGen) gen_copy_for_array(info ast.Array, styp string, copy_fn_name string) {
-	g.definitions.writeln('function $copy_fn_name (x) { return x; }')
+fn (mut g JsGen) gen_copy_for_array(_info ast.Array, _styp string, copy_fn_name string) {
+	g.definitions.writeln('function ${copy_fn_name} (x) { return x; }')
 }
 
-fn (mut g JsGen) gen_copy_for_array_fixed(info ast.ArrayFixed, styp string, copy_fn_name string) {
-	g.definitions.writeln('function $copy_fn_name (x) { return x; }')
+fn (mut g JsGen) gen_copy_for_array_fixed(_info ast.ArrayFixed, _styp string, copy_fn_name string) {
+	g.definitions.writeln('function ${copy_fn_name} (x) { return x; }')
 }
 
-fn (mut g JsGen) gen_copy_for_map(info ast.Map, styp string, copy_fn_name string) {
-	g.definitions.writeln('function $copy_fn_name (x) { return x; }')
+fn (mut g JsGen) gen_copy_for_map(_info ast.Map, _styp string, copy_fn_name string) {
+	g.definitions.writeln('function ${copy_fn_name} (x) { return x; }')
 }
 
-fn (mut g JsGen) gen_copy_for_struct(info ast.Struct, styp string, copy_fn_name string) {
+fn (mut g JsGen) gen_copy_for_struct(_info ast.Struct, _styp string, copy_fn_name string) {
 	mut fn_builder := strings.new_builder(512)
 	defer {
 		g.definitions.writeln(fn_builder.str())
@@ -159,10 +159,10 @@ fn (mut g JsGen) gen_copy_for_struct(info ast.Struct, styp string, copy_fn_name 
 
 	/*
 	tmp := g.new_tmp_var()
-	fn_builder.writeln('\tlet $tmp = new ${styp}({});')
+	fn_builder.writeln('\tlet ${tmp} = new ${styp}({});')
 	for field in info.fields {
 		println(field)
-		if field.name.len == 0 {
+		if field.name == '' {
 
 		} else {
 			mut shall_copy := true
@@ -174,13 +174,13 @@ fn (mut g JsGen) gen_copy_for_struct(info ast.Struct, styp string, copy_fn_name 
 			}
 			if shall_copy {
 				func_name := g.get_copy_fn(field.typ)
-				fn_builder.writeln('\t${tmp}.$field.name = ${func_name}(it.$field.name);')
+				fn_builder.writeln('\t${tmp}.${field.name} = ${func_name}(it.${field.name});')
 			} else {
-				fn_builder.writeln('\t${tmp}.$field.name = it.$field.name')
+				fn_builder.writeln('\t${tmp}.${field.name} = it.${field.name}')
 			}
 		}
 	}
-	fn_builder.writeln('\treturn $tmp;\n}')*/
+	fn_builder.writeln('\treturn ${tmp};\n}')*/
 }
 
 fn (mut g JsGen) final_gen_copy(typ StrType) {
@@ -188,25 +188,26 @@ fn (mut g JsGen) final_gen_copy(typ StrType) {
 		return
 	}
 	g.generated_copy_fns << typ
-	sym := g.table.get_type_symbol(typ.typ)
-	if sym.has_method('\$copy') && !typ.typ.has_flag(.optional) {
+	sym := g.table.sym(typ.typ)
+	if sym.has_method('\$copy') && !typ.typ.has_flag(.option) {
 		return
 	}
 	styp := typ.styp
 	copy_fn_name := styp_to_copy_fn_name(styp)
-	if typ.typ.has_flag(.optional) {
+	if typ.typ.has_flag(.option) {
 		g.gen_copy_for_option(typ.typ, styp, copy_fn_name)
 		return
 	}
 	match styp {
-		'byte', 'u8', 'u16', 'u32', 'u64', 'i16', 'int', 'i64', 'isize', 'usize', 'bool',
-		'int_literal', 'float_literal', 'f32', 'f64', 'voidptr' {
+		'byte', 'u8', 'u16', 'u32', 'u64', 'i16', 'i32', 'int', 'i64', 'isize', 'usize', 'bool',
+		'char', 'rune', 'int_literal', 'float_literal', 'f32', 'f64', 'voidptr' {
 			g.definitions.writeln('function ${sym.cname}_\$copy(it) { return new ${sym.cname}(it.val); }')
 			return
 		}
 		else {}
 	}
-	match mut sym.info {
+
+	match sym.info {
 		ast.Alias {
 			g.gen_copy_for_alias(sym.info, styp, copy_fn_name)
 		}
@@ -238,7 +239,7 @@ fn (mut g JsGen) final_gen_copy(typ StrType) {
 			g.gen_copy_for_interface(sym.info, styp, copy_fn_name)
 		}
 		else {
-			verror("could not generate string method $copy_fn_name for type '$styp'")
+			verror("could not generate string method ${copy_fn_name} for type '${styp}'")
 		}
 	}
 }

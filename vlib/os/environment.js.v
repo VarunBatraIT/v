@@ -3,6 +3,7 @@ module os
 $if js_node {
 	#global.$ENV = $process.env
 } $else {
+	#const global = $global;
 	#global.$ENV = {}
 }
 
@@ -16,6 +17,17 @@ pub fn setenv(key string, val string, overwrite bool) {
 pub fn getenv(key string) string {
 	mut res := ''
 	#if ($ENV[key]) res = new string($ENV[key])
+
+	return res
+}
+
+// `getenv_opt` returns the value of a given environment variable.
+// Returns `none` if the environment variable does not exist.
+pub fn getenv_opt(key string) ?string {
+	#if (!$ENV[key]) return none__;
+
+	mut res := ''
+	#if ($ENV[key]) res = new string($ENV[key]);
 
 	return res
 }

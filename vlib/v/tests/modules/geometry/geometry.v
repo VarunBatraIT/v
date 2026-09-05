@@ -1,8 +1,6 @@
 module geometry
 
-const (
-	module_name = 'geometry'
-)
+const module_name = 'geometry'
 
 pub enum Shape {
 	circle
@@ -40,7 +38,7 @@ pub fn (a Point) + (b Point) Point {
 }
 
 pub fn (a Point) str() string {
-	return '$a.x $a.y'
+	return '${a.x} ${a.y}'
 }
 
 pub fn point_str(a Point) string {

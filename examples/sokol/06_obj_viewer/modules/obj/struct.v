@@ -11,8 +11,9 @@
 module obj
 
 import gg.m4
+import sokol.gfx
 
-// part struct mantain the fae indexes list
+// part struct maintaining the face indices
 pub struct Part {
 pub mut:
 	faces    [][][3]int // v n t index order, if -1 not available
@@ -20,7 +21,7 @@ pub mut:
 	material string
 }
 
-// materias struct, all Ks and Ns are stored as maps of string
+// material struct, all Ks and Ns are stored as maps of string
 pub struct Material {
 pub mut:
 	name string
@@ -32,8 +33,8 @@ pub mut:
 // render data used for the rendering
 pub struct Render_data {
 pub mut:
-	pipeline C.sg_pipeline
-	bind     C.sg_bindings
+	pipeline gfx.Pipeline
+	bind     gfx.Bindings
 	n_vert   u32
 	material string
 }
@@ -47,16 +48,17 @@ pub mut:
 	vt []m4.Vec4 // textures
 
 	name          string
-	part          []Part                // parts of the ObjPart
-	mat           []Material            // list of the materials of the ObjPart
-	mat_map       map[string]int        // maping material name to its material index
-	texture       map[string]C.sg_image // GPU loaded texture map
-	material_file string // .mtl file name for the .obj
+	part          []Part                 // parts of the ObjPart
+	mat           []Material             // list of the materials of the ObjPart
+	mat_map       map[string]int         // mapping material name to its material index
+	texture       map[string]gfx.Image   // GPU loaded texture map
+	sampler       map[string]gfx.Sampler // GPU loaded sampler
+	material_file string                 // .mtl file name for the .obj
 
 	rend_data []Render_data // render data used for the rendering
 
 	t_m m4.Mat4 = m4.unit_m4() // transform matrix for this ObjPart
-	// child []ObjPart           // childs
+	// child []ObjPart
 	// stats
 	min    m4.Vec4 // min 3d position in the ObjPart
 	max    m4.Vec4 // max 3d position in the ObjPart
@@ -82,14 +84,14 @@ pub mut:
 // data passed to the pixel shader
 pub struct Tmp_fs_param {
 pub mut:
-	ligth m4.Vec4
+	light m4.Vec4
 	ka    m4.Vec4 = m4.Vec4{
 		e: [f32(0.1), 0.0, 0.0, 1.0]!
 	}
-	kd m4.Vec4 = m4.Vec4{
+	kd    m4.Vec4 = m4.Vec4{
 		e: [f32(0.5), 0.5, 0.5, 1.0]!
 	}
-	ks m4.Vec4 = m4.Vec4{
+	ks    m4.Vec4 = m4.Vec4{
 		e: [f32(1.0), 1.0, 1.0, 1.0]!
 	}
 }
@@ -97,8 +99,8 @@ pub mut:
 // shader data for the rendering
 pub struct Shader_data {
 pub mut:
-	vs_data &Tmp_vs_param
+	vs_data &Tmp_vs_param = unsafe { nil }
 	vs_len  int
-	fs_data &Tmp_fs_param
+	fs_data &Tmp_fs_param = unsafe { nil }
 	fs_len  int
 }

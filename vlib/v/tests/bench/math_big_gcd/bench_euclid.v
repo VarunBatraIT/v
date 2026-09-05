@@ -1,6 +1,6 @@
 module main
 
-// NB: this benchmark is preferable to be compiled with: `v -prod -cg -gc boehm bench_euclid.v`
+// Note: this benchmark is preferable to be compiled with: `v -prod -cg -gc boehm bench_euclid.v`
 import math.big
 import benchmark
 import os
@@ -11,7 +11,7 @@ import v.tests.bench.math_big_gcd.prime {
 }
 
 interface TestDataI {
-	r big.Integer
+	r  big.Integer
 	aa big.Integer
 	bb big.Integer
 }
@@ -19,21 +19,20 @@ interface TestDataI {
 type GCDSet = PrimeSet
 type Clocks = map[string]benchmark.Benchmark
 
-const (
-	empty_set = GCDSet{'1', '1', '1'}
-	with_dots = false
-)
+const empty_set = GCDSet{'1', '1', '1'}
+const with_dots = false
 
 fn main() {
-	fp := os.join_path(@VROOT, prime.toml_path)
+	fp := os.join_path(@VEXEROOT, prime.toml_path)
 	if !prime_file_exists(fp) {
-		panic('expected file |$fp| - not found.')
+		panic('expected file |${fp}| - not found.')
 	}
 
 	mut clocks := Clocks(map[string]benchmark.Benchmark{})
 
 	for algo in [
-		'euclid',
+		'gcd',
+		'gcd_euclid',
 		'gcd_binary',
 		//'u32binary',
 		//'u64binary'
@@ -60,7 +59,11 @@ fn main() {
 			(aa % gcd) == big.zero_int,
 			(bb % gcd) == big.zero_int,
 		].all(it == true)
-		{ true } else { false }
+		{
+			true
+		} else {
+			false
+		}
 	}
 
 	cfgs := [
@@ -83,10 +86,10 @@ fn main() {
 		['biggest', 'crazy', 'giga'],
 	].map(PrimeCfg{it[0], it[1], it[2]})
 
-	println('\n$cfgs.len x Tests')
+	println('\n${cfgs.len} x Tests')
 
 	for i, prime_cfg in cfgs {
-		println('\n#-${i + 1}(Stack) "$prime_cfg"')
+		println('\n#-${i + 1}(Stack) "${prime_cfg}"')
 		bench_euclid_vs_binary(prime_cfg, false, predicate_fn, mut clocks)
 
 		// just-to-be-sure, but makes no difference in this test.
@@ -101,16 +104,16 @@ fn main() {
 	println(clocks['euclid'].total_message('both algorithms '))
 
 	msg := [
-		'Seems to me as if euclid in big.Integer.gcd() performs better on ',
+		'Seems to me, that big.Integer.gcd_euclid in big.Integer.gcd() performs better on ',
 		'very-small-integers up to 8-byte/u64. The tests #-1..5 show this.',
-		'The gcd_binary-algo seems to be perform better, the larger the numbers/buffers get.',
-		'On my machine, i see consistent gains between ~10-30-percent with :',
+		'The big.Integer.gcd_binary algo seems to be perform better, the larger the numbers/buffers get.',
+		'On my machine, I see consistent gains between ~10-30-percent with :',
 		'\n',
 		'v -prod -cg -gc boehm bench_euclid.v',
 		'\n',
 		'This test covers multiplied primes up-to a length of 300-char-digits in ',
 		'a decimal-string. This equals (188-byte) == 47 x u32-values.',
-		'edit/change primes in $prime.toml_path',
+		'edit/change primes in ${prime.toml_path}',
 		'Improvements & critique are welcome : \n',
 		'https://lemire.me/blog/2013/12/26/fastest-way-to-compute-the-greatest-common-divisor/',
 	].join('\n')
@@ -158,11 +161,11 @@ fn run_benchmark(data []DataI, heap bool, mut clocks Clocks) bool {
 	ratio := (buffer_space * 4) / (testdata.len * 3)
 
 	msg := [
-		'avg-$ratio-byte/Prime, $min_byte-byte < Prime < $max_byte-byte \n',
+		'avg-${ratio}-byte/Prime, ${min_byte}-byte < Prime < ${max_byte}-byte \n',
 		'~${buffer_space * 4 / 1024}-Kb-',
 		if heap { 'Heap' } else { 'Stack' },
-		'-space for $testdata.len-items x ',
-		'$rounds-rounds',
+		'-space for ${testdata.len}-items x ',
+		'${rounds}-rounds',
 	].join('')
 	println(msg)
 
@@ -173,22 +176,29 @@ fn run_benchmark(data []DataI, heap bool, mut clocks Clocks) bool {
 		for cycles < rounds {
 			for set in testdata {
 				match algo {
-					'euclid' {
+					'gcd' {
 						if set.r != set.aa.gcd(set.bb) {
-							eprintln('$algo failed ?')
+							eprintln('${algo} failed ?')
+							clock.fail()
+							break
+						}
+					}
+					'gcd_euclid' {
+						if set.r != set.aa.gcd_euclid(set.bb) {
+							eprintln('${algo} failed ?')
 							clock.fail()
 							break
 						}
 					}
 					'gcd_binary' {
 						if set.r != set.aa.gcd_binary(set.bb) {
-							eprintln('$algo failed ?')
+							eprintln('${algo} failed ?')
 							clock.fail()
 							break
 						}
 					}
 					else {
-						eprintln('unknown algo was "$algo"')
+						eprintln('unknown algo was "${algo}"')
 						continue
 					}
 				}
@@ -224,9 +234,9 @@ fn bench_euclid_vs_binary(test_config PrimeCfg, heap bool, predicate_fn fn (ps P
 	// during later testing.
 	//
 	mut casted_sets := if heap { gcd_primes.map(unsafe {
-			DataI(&PrimeSet(&it)).cast<HeapData>()
+			DataI(&PrimeSet(&it)).cast[HeapData]()
 		}) } else { gcd_primes.map(unsafe {
-			DataI(&PrimeSet(&it)).cast<StackData>()
+			DataI(&PrimeSet(&it)).cast[StackData]()
 		}) }
 
 	// ready use the primes in the benchmark
@@ -248,7 +258,7 @@ fn prepare_and_test_gcd(primeset PrimeSet, test fn (ps PrimeSet) bool) GCDSet {
 	bb := cast_bi(primeset.b) * r
 	gcd := aa.gcd(bb)
 
-	return GCDSet{'$gcd', '$aa', '$bb'}
+	return GCDSet{'${gcd}', '${aa}', '${bb}'}
 }
 
 fn prime_file_exists(path string) bool {
@@ -262,7 +272,7 @@ pub fn bi_from_decimal_string(s string) big.Integer {
 	return big.integer_from_radix(s, u32(10)) or {
 		msg := [
 			'Cannot convert prime from decimal-string.',
-			'prime was : "$s"\n',
+			'prime was : "${s}"\n',
 		].join('\n')
 		panic(msg)
 	}
@@ -271,12 +281,12 @@ pub fn bi_from_decimal_string(s string) big.Integer {
 // need the bi.digits.len - during test only - to calculate
 // the size of big.Integers-buffer
 //
-fn bi_buffer_len(input []byte) int {
+fn bi_buffer_len(input []u8) int {
 	if input.len == 0 {
 		return 0
 	}
 	// pad input
-	mut padded_input := []byte{len: ((input.len + 3) & ~0x3) - input.len, cap: (input.len + 3) & ~0x3, init: 0x0}
+	mut padded_input := []u8{len: ((input.len + 3) & ~0x3) - input.len, cap: (input.len + 3) & ~0x3, init: 0x0}
 	padded_input << input
 	mut digits := []u32{len: padded_input.len / 4}
 	// combine every 4 bytes into a u32 and insert into n.digits
@@ -291,7 +301,7 @@ fn bi_buffer_len(input []byte) int {
 	return digits.len
 }
 
-[heap]
+@[heap]
 pub struct HeapData {
 pub mut:
 	r  big.Integer
@@ -301,15 +311,15 @@ pub mut:
 
 pub fn (hd HeapData) to_primeset() PrimeSet {
 	return PrimeSet{
-		r: '$hd.r'
-		a: '$hd.aa'
-		b: '$hd.bb'
+		r: '${hd.r}'
+		a: '${hd.aa}'
+		b: '${hd.bb}'
 	}
 }
 
 pub fn (hd HeapData) from_primeset(p PrimeSet) DataI {
 	return DataI(HeapData{
-		r: bi_from_decimal_string(p.r)
+		r:  bi_from_decimal_string(p.r)
 		aa: bi_from_decimal_string(p.a)
 		bb: bi_from_decimal_string(p.b)
 	})
@@ -324,15 +334,15 @@ pub mut:
 
 pub fn (sd StackData) to_primeset() PrimeSet {
 	return PrimeSet{
-		r: '$sd.r'
-		a: '$sd.aa'
-		b: '$sd.bb'
+		r: '${sd.r}'
+		a: '${sd.aa}'
+		b: '${sd.bb}'
 	}
 }
 
 pub fn (sd StackData) from_primeset(p PrimeSet) DataI {
 	return DataI(StackData{
-		r: bi_from_decimal_string(p.r)
+		r:  bi_from_decimal_string(p.r)
 		aa: bi_from_decimal_string(p.a)
 		bb: bi_from_decimal_string(p.b)
 	})

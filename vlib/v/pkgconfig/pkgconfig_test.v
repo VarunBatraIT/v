@@ -21,7 +21,9 @@ fn test_dependency_resolution_fails_correctly() {
 	mut errors := []string{}
 	for pc in pc_files {
 		pcname := os.file_name(pc).replace('.pc', '')
-		pkgconfig.load(pcname, use_default_paths: false, path: samples_dir) or { errors << err.msg }
+		pkgconfig.load(pcname, use_default_paths: false, path: samples_dir) or {
+			errors << err.msg()
+		}
 	}
 	assert errors.len < pc_files.len
 	assert errors == ['could not resolve dependency xyz-unknown-package']
@@ -36,7 +38,7 @@ fn test_samples() {
 			if pcname == 'dep-resolution-fail' {
 				continue
 			}
-			println('>>> err: $err')
+			println('>>> err: ${err}')
 			assert false
 			return
 		}
@@ -55,6 +57,7 @@ fn test_samples() {
 			assert x.cflags == ['-I/usr/include', '-pthread', '-I/usr/include/glib-2.0',
 				'-I/usr/lib/x86_64-linux-gnu/glib-2.0/include']
 			assert x.vars == {
+				'pcfiledir':         samples_dir
 				'prefix':            '/usr'
 				'libdir':            '/usr/lib/x86_64-linux-gnu'
 				'includedir':        '/usr/include'
@@ -74,6 +77,7 @@ fn test_samples() {
 			assert x.cflags == ['-I/usr/include/glib-2.0',
 				'-I/usr/lib/x86_64-linux-gnu/glib-2.0/include', '-I/usr/include']
 			assert x.vars == {
+				'pcfiledir':       samples_dir
 				'prefix':          '/usr'
 				'libdir':          '/usr/lib/x86_64-linux-gnu'
 				'includedir':      '/usr/include'
@@ -85,6 +89,14 @@ fn test_samples() {
 			assert x.requires_private == ['libpcre']
 			assert x.version == '2.64.3'
 			assert x.conflicts == []
+		}
+		if x.name == 'OpenSSL' {
+			assert x.modname == 'openssl-3.3.2'
+			assert x.version == '3.3.2'
+			assert x.description == 'Secure Sockets Layer and cryptography libraries and tools'
+			assert x.vars['prefix'] == '/opt/homebrew/Cellar/openssl@3/3.3.2'
+			assert x.vars['libdir'] == '/opt/homebrew/Cellar/openssl@3/3.3.2/lib'
+			assert x.vars['includedir'] == '/opt/homebrew/Cellar/openssl@3/3.3.2/include'
 		}
 	}
 }

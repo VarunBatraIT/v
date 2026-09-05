@@ -1,25 +1,34 @@
 module sgl
 
 // setup/shutdown/misc
-fn C.sgl_setup(desc &C.sgl_desc_t)
+fn C.sgl_setup(const_desc &C.sgl_desc_t)
 fn C.sgl_shutdown()
-fn C.sgl_error() C.sgl_error_t
-fn C.sgl_defaults()
+fn C.sgl_error() SglError
+fn C.sgl_context_error(ctx C.sgl_context) SglError
 fn C.sgl_rad(deg f32) f32
 fn C.sgl_deg(rad f32) f32
 
+// context functions
+fn C.sgl_make_context(const_desc &C.sgl_context_desc_t) C.sgl_context
+fn C.sgl_destroy_context(ctx C.sgl_context)
+fn C.sgl_set_context(ctx C.sgl_context)
+fn C.sgl_get_context() C.sgl_context
+fn C.sgl_default_context() C.sgl_context
+
 // create and destroy pipeline objects
-fn C.sgl_make_pipeline(desc &C.sg_pipeline_desc) C.sgl_pipeline
+fn C.sgl_make_pipeline(const_desc &C.sg_pipeline_desc) C.sgl_pipeline
+fn C.sgl_context_make_pipeline(ctx C.sgl_context, const_desc &C.sg_pipeline_desc) C.sgl_pipeline
 fn C.sgl_destroy_pipeline(pip C.sgl_pipeline)
 
 // render state functions
+fn C.sgl_defaults()
 fn C.sgl_viewport(x int, y int, w int, h int, origin_top_left bool)
 fn C.sgl_viewportf(x f32, y f32, w f32, h f32, origin_top_left bool)
 fn C.sgl_scissor_rect(x int, y int, w int, h int, origin_top_left bool)
 fn C.sgl_scissor_rectf(x f32, y f32, w f32, h f32, origin_top_left bool)
 fn C.sgl_enable_texture()
 fn C.sgl_disable_texture()
-fn C.sgl_texture(img C.sg_image)
+fn C.sgl_texture(img C.sg_image, sampler C.sg_sampler)
 
 // pipeline stack functions
 fn C.sgl_load_default_pipeline()
@@ -42,7 +51,8 @@ fn C.sgl_translate(x f32, y f32, z f32)
 fn C.sgl_frustum(l f32, r f32, b f32, t f32, n f32, f f32)
 fn C.sgl_ortho(l f32, r f32, b f32, t f32, n f32, f f32)
 fn C.sgl_perspective(fov_y f32, aspect f32, z_near f32, z_far f32)
-fn C.sgl_lookat(eye_x f32, eye_y f32, eye_z f32, center_x f32, center_y f32, center_z f32, up_x f32, up_y f32, up_z f32)
+fn C.sgl_lookat(eye_x f32, eye_y f32, eye_z f32, center_x f32, center_y f32, center_z f32, up_x f32, up_y f32,
+	up_z f32)
 fn C.sgl_push_matrix()
 fn C.sgl_pop_matrix()
 
@@ -50,9 +60,10 @@ fn C.sgl_pop_matrix()
 fn C.sgl_t2f(u f32, v f32)
 fn C.sgl_c3f(r f32, g f32, b f32)
 fn C.sgl_c4f(r f32, g f32, b f32, a f32)
-fn C.sgl_c3b(r byte, g byte, b byte)
-fn C.sgl_c4b(r byte, g byte, b byte, a byte)
+fn C.sgl_c3b(r u8, g u8, b u8)
+fn C.sgl_c4b(r u8, g u8, b u8, a u8)
 fn C.sgl_c1i(rgba u32)
+fn C.sgl_point_size(s f32)
 
 // define primitives, each begin/end is one draw command
 fn C.sgl_begin_points()
@@ -66,26 +77,27 @@ fn C.sgl_v3f(x f32, y f32, z f32)
 fn C.sgl_v2f_t2f(x f32, y f32, u f32, v f32)
 fn C.sgl_v3f_t2f(x f32, y f32, z f32, u f32, v f32)
 fn C.sgl_v2f_c3f(x f32, y f32, r f32, g f32, b f32)
-fn C.sgl_v2f_c3b(x f32, y f32, r byte, g byte, b byte)
+fn C.sgl_v2f_c3b(x f32, y f32, r u8, g u8, b u8)
 fn C.sgl_v2f_c4f(x f32, y f32, r f32, g f32, b f32, a f32)
-fn C.sgl_v2f_c4b(x f32, y f32, r byte, g byte, b byte, a byte)
+fn C.sgl_v2f_c4b(x f32, y f32, r u8, g u8, b u8, a u8)
 fn C.sgl_v2f_c1i(x f32, y f32, rgba u32)
 fn C.sgl_v3f_c3f(x f32, y f32, z f32, r f32, g f32, b f32)
-fn C.sgl_v3f_c3b(x f32, y f32, z f32, r byte, g byte, b byte)
+fn C.sgl_v3f_c3b(x f32, y f32, z f32, r u8, g u8, b u8)
 fn C.sgl_v3f_c4f(x f32, y f32, z f32, r f32, g f32, b f32, a f32)
-fn C.sgl_v3f_c4b(x f32, y f32, z f32, r byte, g byte, b byte, a byte)
+fn C.sgl_v3f_c4b(x f32, y f32, z f32, r u8, g u8, b u8, a u8)
 fn C.sgl_v3f_c1i(x f32, y f32, z f32, rgba u32)
 fn C.sgl_v2f_t2f_c3f(x f32, y f32, u f32, v f32, r f32, g f32, b f32)
-fn C.sgl_v2f_t2f_c3b(x f32, y f32, u f32, v f32, r byte, g byte, b byte)
+fn C.sgl_v2f_t2f_c3b(x f32, y f32, u f32, v f32, r u8, g u8, b u8)
 fn C.sgl_v2f_t2f_c4f(x f32, y f32, u f32, v f32, r f32, g f32, b f32, a f32)
-fn C.sgl_v2f_t2f_c4b(x f32, y f32, u f32, v f32, r byte, g byte, b byte, a byte)
+fn C.sgl_v2f_t2f_c4b(x f32, y f32, u f32, v f32, r u8, g u8, b u8, a u8)
 fn C.sgl_v2f_t2f_c1i(x f32, y f32, u f32, v f32, rgba u32)
 fn C.sgl_v3f_t2f_c3f(x f32, y f32, z f32, u f32, v f32, r f32, g f32, b f32)
-fn C.sgl_v3f_t2f_c3b(x f32, y f32, z f32, u f32, v f32, r byte, g byte, b byte)
+fn C.sgl_v3f_t2f_c3b(x f32, y f32, z f32, u f32, v f32, r u8, g u8, b u8)
 fn C.sgl_v3f_t2f_c4f(x f32, y f32, z f32, u f32, v f32, r f32, g f32, b f32, a f32)
-fn C.sgl_v3f_t2f_c4b(x f32, y f32, z f32, u f32, v f32, r byte, g byte, b byte, a byte)
+fn C.sgl_v3f_t2f_c4b(x f32, y f32, z f32, u f32, v f32, r u8, g u8, b u8, a u8)
 fn C.sgl_v3f_t2f_c1i(x f32, y f32, z f32, u f32, v f32, rgba u32)
 fn C.sgl_end()
 
-// render everything
+// render recorded commands
 fn C.sgl_draw()
+fn C.sgl_context_draw(ctx C.sgl_context)

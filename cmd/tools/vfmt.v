@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module main
@@ -13,27 +13,57 @@ import v.fmt
 import v.util
 import v.util.diff
 import v.parser
-import vhelp
+import v.help
+import v3.errors as v3errors
+import v3.flat
+import v3.gen.v as v3fmt
+import v3.parser as v3parser
+import v3.pref as v3pref
 
 struct FormatOptions {
-	is_l       bool
-	is_c       bool // NB: This refers to the '-c' fmt flag, NOT the C backend
-	is_w       bool
-	is_diff    bool
-	is_verbose bool
-	is_all     bool
-	is_debug   bool
-	is_noerror bool
-	is_verify  bool // exit(1) if the file is not vfmt'ed
-	is_worker  bool // true *only* in the worker processes. NB: workers can crash.
-	is_backup  bool // make a `file.v.bak` copy *before* overwriting a `file.v` in place with `-w`
+	is_l             bool
+	is_c             bool // Note: This refers to the '-c' fmt flag, NOT the C backend
+	is_w             bool
+	is_diff          bool
+	is_verbose       bool
+	is_debug         bool
+	is_noerror       bool
+	is_verify        bool // exit(1) if the file is not vfmt'ed
+	is_worker        bool // true *only* in the worker processes. Note: workers can crash.
+	is_backup        bool // make a `file.v.bak` copy *before* overwriting a `file.v` in place with `-w`
+	in_process       bool // do not fork a worker process; potentially faster, but more prone to crashes for invalid files
+	is_new_int       bool // rewrite int to i32 in translated modules and C declarations
+	no_migrate_json2 bool // opt out of the default rewrite of deprecated `json` usage to `json2` (`-no-migrate-json2`)
+	backend          string = 'c'
+mut:
+	diff_cmd string // filled in when -diff or -verify is passed
 }
 
-const (
-	formatted_file_token = '\@\@\@' + 'FORMATTED_FILE: '
-	vtmp_folder          = util.get_vtmp_folder()
-	term_colors          = term.can_show_color_on_stderr()
-)
+const formatted_file_token = '\@\@\@' + 'FORMATTED_FILE: '
+const vtmp_folder = os.vtmp_dir()
+const term_colors = term.can_show_color_on_stderr()
+const legacy_vfmt_only_flags = ['-backup', '-c', '-diff', '-inprocess', '-l', '-new_int',
+	'-no-migrate-json2', '-noerror', '-verbose', '--verbose', '-verify', '-w']
+
+fn formatter_backend(args []string) !string {
+	mut backend := 'c'
+	for i, arg in args {
+		if arg in ['-b', '-backend'] && i + 1 < args.len {
+			backend = match args[i + 1] {
+				'c', 'fastc', 'wasm' {
+					args[i + 1]
+				}
+				'js', 'js_node', 'js_browser', 'js_freestanding' {
+					'js'
+				}
+				else {
+					return error('Unknown V backend: ${args[i + 1]}\nValid -backend choices are: c, fastc, js, js_node, js_browser, js_freestanding, wasm')
+				}
+			}
+		}
+	}
+	return backend
+}
 
 fn main() {
 	// if os.getenv('VFMT_ENABLE') == '' {
@@ -43,25 +73,30 @@ fn main() {
 	toolexe := os.executable()
 	util.set_vroot_folder(os.dir(os.dir(os.dir(toolexe))))
 	args := util.join_env_vflags_and_os_args()
+	backend := formatter_backend(args) or {
+		eprintln(err.msg())
+		exit(1)
+	}
 	mut foptions := FormatOptions{
-		is_c: '-c' in args
-		is_l: '-l' in args
-		is_w: '-w' in args
-		is_diff: '-diff' in args
-		is_verbose: '-verbose' in args || '--verbose' in args
-		is_all: '-all' in args || '--all' in args
-		is_worker: '-worker' in args
-		is_debug: '-debug' in args
-		is_noerror: '-noerror' in args
-		is_verify: '-verify' in args
-		is_backup: '-backup' in args
+		is_c:             '-c' in args
+		is_l:             '-l' in args
+		is_w:             '-w' in args
+		is_diff:          '-diff' in args
+		is_verbose:       '-verbose' in args || '--verbose' in args
+		is_worker:        '-worker' in args
+		is_debug:         '-debug' in args
+		is_noerror:       '-noerror' in args
+		is_verify:        '-verify' in args
+		is_backup:        '-backup' in args
+		in_process:       '-inprocess' in args
+		is_new_int:       '-new_int' in args
+		no_migrate_json2: '-no-migrate-json2' in args
+		backend:          backend
 	}
 	if term_colors {
 		os.setenv('VCOLORS', 'always', true)
 	}
-	if foptions.is_verbose {
-		eprintln('vfmt foptions: $foptions')
-	}
+	foptions.vlog('vfmt foptions: ${foptions}')
 	if foptions.is_worker {
 		// -worker should be added by a parent vfmt process.
 		// We launch a sub process for each file because
@@ -74,44 +109,61 @@ fn main() {
 	// we are NOT a worker at this stage, i.e. we are a parent vfmt process
 	possible_files := cmdline.only_non_options(cmdline.options_after(args, ['fmt']))
 	if foptions.is_verbose {
-		eprintln('vfmt toolexe: $toolexe')
+		eprintln('vfmt toolexe: ${toolexe}')
 		eprintln('vfmt args: ' + os.args.str())
 		eprintln('vfmt env_vflags_and_os_args: ' + args.str())
 		eprintln('vfmt possible_files: ' + possible_files.str())
 	}
+	if '-help' in args || '--help' in args {
+		help.print_and_exit('fmt')
+	}
 	files := util.find_all_v_files(possible_files) or {
-		verror(err.msg)
+		verror(err.msg())
 		return
 	}
 	if os.is_atty(0) == 0 && files.len == 0 {
 		foptions.format_pipe()
 		exit(0)
 	}
-	if files.len == 0 || '-help' in args || '--help' in args {
-		vhelp.show_topic('fmt')
-		exit(0)
+	if files.len == 0 {
+		help.print_and_exit('fmt')
 	}
 	mut cli_args_no_files := []string{}
-	for a in os.args {
+	for idx, a in os.args {
+		if idx == 0 {
+			cli_args_no_files << os.quoted_path(a)
+			continue
+		}
 		if a !in files {
 			cli_args_no_files << a
 		}
 	}
 	mut errors := 0
+	mut has_internal_error := false
 	for file in files {
 		fpath := os.real_path(file)
+		if foptions.is_verify && foptions.in_process {
+			// For a small amount of files, it is faster to process
+			// everything directly in the same process, single threaded,
+			// when vfmt is compiled with `-gc none`:
+			if !foptions.verify_file(fpath) {
+				println("${file} is not vfmt'ed")
+				errors++
+			}
+			continue
+		}
 		mut worker_command_array := cli_args_no_files.clone()
 		worker_command_array << ['-worker', util.quote_path(fpath)]
 		worker_cmd := worker_command_array.join(' ')
-		if foptions.is_verbose {
-			eprintln('vfmt worker_cmd: $worker_cmd')
-		}
+		foptions.vlog('vfmt worker_cmd: ${worker_cmd}')
 		worker_result := os.execute(worker_cmd)
 		// Guard against a possibly crashing worker process.
 		if worker_result.exit_code != 0 {
 			eprintln(worker_result.output)
 			if worker_result.exit_code == 1 {
 				eprintln('Internal vfmt error while formatting file: ${file}.')
+				has_internal_error = true
+				continue
 			}
 			errors++
 			continue
@@ -130,122 +182,208 @@ fn main() {
 		}
 		errors++
 	}
-	if errors > 0 {
-		eprintln('Encountered a total of: $errors errors.')
-		if foptions.is_noerror {
-			exit(0)
-		}
-		if foptions.is_verify {
-			exit(1)
-		}
-		if foptions.is_c {
-			exit(2)
-		}
-		exit(1)
+	if has_internal_error {
+		// When some files could not be processed due to internal vfmt errors,
+		// exit with code 5 regardless of format-diff errors in other files.
+		// This prevents exit codes like 7 (2+5) that confuse downstream CI checks.
+		exit(5)
 	}
+	if errors > 0 {
+		if !foptions.is_diff {
+			eprintln('Encountered a total of: ${errors} formatting errors.')
+		}
+		match true {
+			foptions.is_noerror { exit(0) }
+			foptions.is_verify { exit(1) }
+			foptions.is_c { exit(2) }
+			else { exit(1) }
+		}
+	}
+	exit(0)
+}
+
+// verify_file accepts both V3 and legacy vfmt output while the existing source tree
+// transitions to V3 formatting.
+fn (foptions &FormatOptions) verify_file(fpath string) bool {
+	content := os.read_file(fpath) or { return false }
+	fcontent := foptions.formatted_content_from_file(fpath, false) or {
+		if foptions.is_legacy_formatted(fpath, content) {
+			return true
+		}
+		_ = foptions.formatted_content_from_file(fpath, true) or { return false }
+		return false
+	}
+	return fcontent == content || foptions.is_legacy_formatted(fpath, content)
+}
+
+fn (foptions &FormatOptions) is_legacy_formatted(fpath string, content string) bool {
+	args := util.join_env_vflags_and_os_args()
+	mut prefs, _ := pref.parse_args_and_show_errors(['fmt'], legacy_vfmt_args(args), false)
+	prefs.is_fmt = true
+	prefs.skip_warnings = true
+	prefs.output_mode = .silent
+	mut table := ast.new_table()
+	file_ast := parser.parse_file(fpath, mut table, .parse_comments, prefs)
+	if file_ast.errors.len > 0 {
+		return false
+	}
+	table.new_int = foptions.is_new_int
+	legacy_content := fmt.fmt(file_ast, mut table, prefs, foptions.is_debug,
+		migrate_json2: foptions.should_migrate_json2(fpath)
+	)
+	return legacy_content == content
+}
+
+fn legacy_vfmt_args(args []string) []string {
+	mut res := []string{}
+	for i := 1; i < args.len; i++ {
+		arg := args[i]
+		if arg == '-worker' {
+			i++
+			continue
+		}
+		if arg in legacy_vfmt_only_flags {
+			continue
+		}
+		res << arg
+	}
+	return res
+}
+
+fn (foptions &FormatOptions) vlog(msg string) {
+	if foptions.is_verbose {
+		eprintln(msg)
+	}
+}
+
+fn (foptions &FormatOptions) should_migrate_json2(file string) bool {
+	if foptions.no_migrate_json2 {
+		return false
+	}
+	return !file.ends_with('_test.v') && !file.ends_with('.vv')
+}
+
+fn (foptions &FormatOptions) formatted_content_from_file(file string, report_diagnostics bool) !string {
+	foptions.vlog('vfmt running v3.gen.v over file: ${file}')
+	mut prefs := v3pref.new_preferences()
+	prefs.is_fmt = true
+	prefs.migrate_json2 = foptions.should_migrate_json2(file)
+	prefs.preserve_comptime_conditionals = true
+	prefs.supports_inline_asm = true
+	mut p := v3parser.Parser.new(prefs)
+	a := p.parse_file(file)
+	if report_v3_parser_diagnostics(p.diagnostics, a, report_diagnostics) {
+		return error('the file contains parser errors')
+	}
+	return v3fmt.format_with_options(a,
+		is_debug:   foptions.is_debug
+		is_new_int: foptions.is_new_int
+		backend:    foptions.backend
+	)
+}
+
+fn report_v3_parser_diagnostics(diagnostics []v3parser.Diagnostic, a &flat.FlatAst, should_report bool) bool {
+	mut has_errors := false
+	for diagnostic in diagnostics {
+		severity := if diagnostic.severity == '' { 'error:' } else { diagnostic.severity }
+		if severity != 'error:' {
+			continue
+		}
+		has_errors = true
+		if !should_report {
+			continue
+		}
+		if diagnostic.pos.is_valid() && diagnostic.pos.id in a.source_files {
+			eprintln(v3errors.formatted_parser_diagnostic(severity, diagnostic.message, a,
+				diagnostic.pos))
+		} else {
+			eprintln('${diagnostic.file}:${diagnostic.line}:${diagnostic.column}: ${severity} ${diagnostic.message}')
+		}
+	}
+	return has_errors
 }
 
 fn (foptions &FormatOptions) format_file(file string) {
-	mut prefs := pref.new_preferences()
-	prefs.is_fmt = true
-	if foptions.is_verbose {
-		eprintln('vfmt2 running fmt.fmt over file: $file')
-	}
-	table := ast.new_table()
-	// checker := checker.new_checker(table, prefs)
-	file_ast := parser.parse_file(file, table, .parse_comments, prefs)
-	// checker.check(file_ast)
-	formatted_content := fmt.fmt(file_ast, table, prefs, foptions.is_debug)
 	file_name := os.file_name(file)
 	ulid := rand.ulid()
-	vfmt_output_path := os.join_path(vtmp_folder, 'vfmt_${ulid}_$file_name')
-	os.write_file(vfmt_output_path, formatted_content) or { panic(err) }
-	if foptions.is_verbose {
-		eprintln('fmt.fmt worked and $formatted_content.len bytes were written to $vfmt_output_path .')
+	vfmt_output_path := os.join_path(vtmp_folder, 'vfmt_${ulid}_${file_name}')
+	if file.contains('_vfmt_off') {
+		os.cp(file, vfmt_output_path) or { panic(err) }
+		foptions.vlog('format_file copied the file ${file} as it was, 1:1, since its name contains `_vfmt_off`.')
+		eprintln('${formatted_file_token}${vfmt_output_path}')
+		return
 	}
-	eprintln('$formatted_file_token$vfmt_output_path')
+	formatted_content := foptions.formatted_content_from_file(file, !foptions.is_verify
+		&& !foptions.is_c) or {
+		if foptions.is_verify || foptions.is_c {
+			content := os.read_file(file) or { exit(2) }
+			if foptions.is_legacy_formatted(file, content) {
+				os.cp(file, vfmt_output_path) or { exit(2) }
+				eprintln('${formatted_file_token}${vfmt_output_path}')
+				return
+			}
+			_ = foptions.formatted_content_from_file(file, true) or { exit(2) }
+		}
+		exit(2)
+	}
+	os.write_file(vfmt_output_path, formatted_content) or { panic(err) }
+	foptions.vlog('vfmt wrote ${formatted_content.len} bytes to ${vfmt_output_path}.')
+	eprintln('${formatted_file_token}${vfmt_output_path}')
 }
 
 fn (foptions &FormatOptions) format_pipe() {
-	mut prefs := pref.new_preferences()
-	prefs.is_fmt = true
-	if foptions.is_verbose {
-		eprintln('vfmt2 running fmt.fmt over stdin')
-	}
 	input_text := os.get_raw_lines_joined()
-	table := ast.new_table()
-	// checker := checker.new_checker(table, prefs)
-	file_ast := parser.parse_text(input_text, '', table, .parse_comments, prefs)
-	// checker.check(file_ast)
-	formatted_content := fmt.fmt(file_ast, table, prefs, foptions.is_debug)
+	stdin_path := os.join_path(vtmp_folder, 'vfmt_stdin_${rand.ulid()}.v')
+	os.write_file(stdin_path, input_text) or {
+		eprintln('vfmt could not stage stdin: ${err}')
+		exit(1)
+	}
+	defer {
+		os.rm(stdin_path) or {}
+	}
+	formatted_content := foptions.formatted_content_from_file(stdin_path, true) or { exit(1) }
 	print(formatted_content)
-	if foptions.is_verbose {
-		eprintln('fmt.fmt worked and $formatted_content.len bytes were written to stdout.')
-	}
+	flush_stdout()
+	foptions.vlog('vfmt wrote ${formatted_content.len} bytes to stdout.')
 }
 
-fn print_compiler_options(compiler_params &pref.Preferences) {
-	eprintln('         os: ' + compiler_params.os.str())
-	eprintln('  ccompiler: $compiler_params.ccompiler')
-	eprintln('       path: $compiler_params.path ')
-	eprintln('   out_name: $compiler_params.out_name ')
-	eprintln('      vroot: $compiler_params.vroot ')
-	eprintln('lookup_path: $compiler_params.lookup_path ')
-	eprintln('   out_name: $compiler_params.out_name ')
-	eprintln('     cflags: $compiler_params.cflags ')
-	eprintln('    is_test: $compiler_params.is_test ')
-	eprintln('  is_script: $compiler_params.is_script ')
-}
-
-fn (foptions &FormatOptions) post_process_file(file string, formatted_file_path string) ? {
-	if formatted_file_path.len == 0 {
-		return
-	}
-	if foptions.is_diff {
-		diff_cmd := diff.find_working_diff_command() or {
-			eprintln(err)
-			return
-		}
-		if foptions.is_verbose {
-			eprintln('Using diff command: $diff_cmd')
-		}
-		diff := diff.color_compare_files(diff_cmd, file, formatted_file_path)
-		if diff.len > 0 {
-			println(diff)
-		}
-		return
-	}
-	if foptions.is_verify {
-		diff_cmd := diff.find_working_diff_command() or {
-			eprintln(err)
-			return
-		}
-		x := diff.color_compare_files(diff_cmd, file, formatted_file_path)
-		if x.len != 0 {
-			println("$file is not vfmt'ed")
-			return error('')
-		}
+fn (mut foptions FormatOptions) post_process_file(file string, formatted_file_path string) ! {
+	if formatted_file_path == '' {
 		return
 	}
 	fc := os.read_file(file) or {
-		eprintln('File $file could not be read')
+		eprintln('File ${file} could not be read')
 		return
 	}
 	formatted_fc := os.read_file(formatted_file_path) or {
-		eprintln('File $formatted_file_path could not be read')
+		eprintln('File ${formatted_file_path} could not be read')
 		return
 	}
 	is_formatted_different := fc != formatted_fc
+	if foptions.is_diff {
+		if !is_formatted_different {
+			return
+		}
+		println(diff.compare_files(file, formatted_file_path)!)
+		return error('')
+	}
+	if foptions.is_verify {
+		if !is_formatted_different || foptions.is_legacy_formatted(file, fc) {
+			return
+		}
+		println("${file} is not vfmt'ed")
+		return error('')
+	}
 	if foptions.is_c {
-		if is_formatted_different {
-			eprintln('File is not formatted: $file')
+		if is_formatted_different && !foptions.is_legacy_formatted(file, fc) {
+			eprintln('File is not formatted: ${file}')
 			return error('')
 		}
 		return
 	}
 	if foptions.is_l {
 		if is_formatted_different {
-			eprintln('File needs formatting: $file')
+			eprintln('File needs formatting: ${file}')
 		}
 		return
 	}
@@ -255,86 +393,33 @@ fn (foptions &FormatOptions) post_process_file(file string, formatted_file_path 
 				file_bak := '${file}.bak'
 				os.cp(file, file_bak) or {}
 			}
+			mut perms_to_restore := u32(0)
+			$if !windows {
+				fm := os.inode(file)
+				perms_to_restore = fm.bitmask()
+			}
 			os.mv_by_cp(formatted_file_path, file) or { panic(err) }
-			eprintln('Reformatted file: $file')
+			$if !windows {
+				os.chmod(file, int(perms_to_restore)) or { panic(err) }
+			}
+			eprintln('Reformatted file: ${file}')
 		} else {
-			eprintln('Already formatted file: $file')
+			eprintln('Already formatted file: ${file}')
 		}
 		return
 	}
 	print(formatted_fc)
+	flush_stdout()
+}
+
+@[noreturn]
+fn verror(s string) {
+	util.verror('vfmt error', s)
 }
 
 fn (f FormatOptions) str() string {
 	return
-		'FormatOptions{ is_l: $f.is_l, is_w: $f.is_w, is_diff: $f.is_diff, is_verbose: $f.is_verbose,' +
-		' is_all: $f.is_all, is_worker: $f.is_worker, is_debug: $f.is_debug, is_noerror: $f.is_noerror,' +
-		' is_verify: $f.is_verify" }'
-}
-
-fn file_to_mod_name_and_is_module_file(file string) (string, bool) {
-	mut mod_name := 'main'
-	mut is_module_file := false
-	flines := read_source_lines(file) or { return mod_name, is_module_file }
-	for fline in flines {
-		line := fline.trim_space()
-		if line.starts_with('module ') {
-			if !line.starts_with('module main') {
-				is_module_file = true
-				mod_name = line.replace('module ', ' ').trim_space()
-			}
-			break
-		}
-	}
-	return mod_name, is_module_file
-}
-
-fn read_source_lines(file string) ?[]string {
-	source_lines := os.read_lines(file) or { return error('can not read $file') }
-	return source_lines
-}
-
-fn get_compile_name_of_potential_v_project(file string) string {
-	// This function get_compile_name_of_potential_v_project returns:
-	// a) the file's folder, if file is part of a v project
-	// b) the file itself, if the file is a standalone v program
-	pfolder := os.real_path(os.dir(file))
-	// a .v project has many 'module main' files in one folder
-	// if there is only one .v file, then it must be a standalone
-	all_files_in_pfolder := os.ls(pfolder) or { panic(err) }
-	mut vfiles := []string{}
-	for f in all_files_in_pfolder {
-		vf := os.join_path(pfolder, f)
-		if f.starts_with('.') || !f.ends_with('.v') || os.is_dir(vf) {
-			continue
-		}
-		vfiles << vf
-	}
-	if vfiles.len == 1 {
-		return file
-	}
-	// /////////////////////////////////////////////////////////////
-	// At this point, we know there are many .v files in the folder
-	// We will have to read them all, and if there are more than one
-	// containing `fn main` then the folder contains multiple standalone
-	// v programs. If only one contains `fn main` then the folder is
-	// a project folder, that should be compiled with `v pfolder`.
-	mut main_fns := 0
-	for f in vfiles {
-		slines := read_source_lines(f) or { panic(err) }
-		for line in slines {
-			if line.contains('fn main()') {
-				main_fns++
-				if main_fns > 1 {
-					return file
-				}
-			}
-		}
-	}
-	return pfolder
-}
-
-[noreturn]
-fn verror(s string) {
-	util.verror('vfmt error', s)
+		'FormatOptions{ is_l: ${f.is_l}, is_w: ${f.is_w}, is_diff: ${f.is_diff}, is_verbose: ${f.is_verbose},' +
+		' is_worker: ${f.is_worker}, is_debug: ${f.is_debug}, is_noerror: ${f.is_noerror},' +
+		' is_verify: ${f.is_verify}, backend: ${f.backend}" }'
 }

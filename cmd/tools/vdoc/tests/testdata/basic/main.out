@@ -1,6 +1,0 @@
-module main
-
-const (
-	source_root = 'temp'
-)
-fn funky()

@@ -42,7 +42,7 @@ fn (mut l Layer) populate(nb_neurons int, nb_inputs int) {
 	}
 }
 
-struct Network {
+pub struct Network {
 mut:
 	layers []Layer
 }
@@ -281,7 +281,7 @@ pub fn (mut gs Generations) generate() []Network {
 
 pub fn (mut gs Generations) network_score(network Network, score int) {
 	gs.add_genome(Genome{
-		score: score
+		score:   score
 		network: network.get_save()
 	})
 }
