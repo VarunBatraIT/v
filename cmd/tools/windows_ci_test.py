@@ -70,8 +70,8 @@ def validate_master_bootstrap_contract(workflow, master):
         raise ValueError('preflight must retain the default success condition')
     for cc in COMPILERS:
         caller = workflow_block(jobs, f'windows_ci_{cc}', 2)
-        needs = re.findall(r'^    needs: \[([^\]]+)\]$', caller, re.M)
-        if len(needs) != 1 or {name.strip() for name in needs[0].split(',')} != {
+        needs = re.findall(r'^    needs:\s*\[([^\]]+)\]$', caller, re.M)
+        if len(needs) != 1 or {name.strip() for name in needs[0].split(',') if name.strip()} != {
                 'preflight', 'gen_vc_ci', 'bootstrap-windows', 'windows-bootstrap-contracts'}:
             raise ValueError(f'windows_ci_{cc} must retain its bootstrap and contract gates')
     contracts = workflow_block(workflow_block(workflow, 'jobs', 0), 'bootstrap-contracts', 2)
@@ -352,16 +352,39 @@ class MasterBootstrapContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'preflight'):
                     validate_master_bootstrap_contract(self.workflow, changed)
 
+    def test_windows_callers_accept_prettier_wrapping(self):
+        for cc in COMPILERS:
+            body = workflow_block(self.master, f'windows_ci_{cc}', 2)
+            for value in (
+                ' [preflight, gen_vc_ci, bootstrap-windows, windows-bootstrap-contracts]',
+                '\n      [preflight, gen_vc_ci, bootstrap-windows, windows-bootstrap-contracts]',
+                '\n      [\n        preflight,\n        gen_vc_ci,\n'
+                '        bootstrap-windows,\n        windows-bootstrap-contracts,\n      ]',
+            ):
+                changed_body = re.sub(r'^    needs:\s*\[[^\]]+\]$',
+                                      '    needs:' + value, body, count=1, flags=re.M)
+                changed = self.master.replace(body, changed_body, 1)
+                with self.subTest(compiler=cc, needs=value):
+                    self.assertIn('    needs:' + value + '\n', changed_body)
+                    validate_master_bootstrap_contract(self.workflow, changed)
+
     def test_windows_callers_require_successful_bootstrap_and_contracts(self):
         for cc in COMPILERS:
             name = f'windows_ci_{cc}'
             body = workflow_block(self.master, name, 2)
-            for gate in ('bootstrap-windows', 'windows-bootstrap-contracts'):
-                changed = self.master.replace(body, body.replace(', ' + gate, '', 1), 1)
-                with self.subTest(compiler=cc, gate=gate):
-                    self.assertNotEqual(changed, self.master)
-                    with self.assertRaisesRegex(ValueError, name):
-                        validate_master_bootstrap_contract(self.workflow, changed)
+            gates = ['preflight', 'gen_vc_ci', 'bootstrap-windows', 'windows-bootstrap-contracts']
+            for gate in gates:
+                remaining = [item for item in gates if item != gate]
+                for value in (' [' + ', '.join(remaining) + ']',
+                              '\n      [' + ', '.join(remaining) + ']',
+                              '\n      [\n        ' + ',\n        '.join(remaining) + ',\n      ]'):
+                    changed_body = re.sub(r'^    needs:\s*\[[^\]]+\]$',
+                                          '    needs:' + value, body, count=1, flags=re.M)
+                    changed = self.master.replace(body, changed_body, 1)
+                    with self.subTest(compiler=cc, gate=gate, needs=value):
+                        self.assertNotEqual(changed, self.master)
+                        with self.assertRaisesRegex(ValueError, name):
+                            validate_master_bootstrap_contract(self.workflow, changed)
 
     def test_reusable_bootstrap_retains_both_platforms_and_commands(self):
         mutations = [self.workflow.replace('  workflow_call:\n', '', 1),
